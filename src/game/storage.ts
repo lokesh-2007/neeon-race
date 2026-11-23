@@ -5,6 +5,7 @@ import {
   MISSION_CATALOG,
 } from './missions';
 import {
+  CameraMode,
   DailyMissionDefinition,
   GarageConfig,
   GhostRun,
@@ -29,6 +30,7 @@ function buildDefaultSave(): SavedProgress {
     ghostEnabled: true,
     steeringSensitivity: 1.0,
     graphicsQuality: 'auto',
+    cameraMode: 'chase',
     totalCoins: 0,
     bestInfiniteDistanceM: 0,
     bestInfiniteSector: 0,
@@ -84,6 +86,12 @@ export function loadProgress(): SavedProgress {
         parsed.graphicsQuality === 'auto'
           ? parsed.graphicsQuality
           : defaults.graphicsQuality,
+      cameraMode:
+        parsed.cameraMode === 'chase' ||
+        parsed.cameraMode === 'cockpit' ||
+        parsed.cameraMode === 'birds-eye'
+          ? parsed.cameraMode
+          : defaults.cameraMode,
       totalCoins: Number.isFinite(coins) && coins >= 0 ? Math.floor(coins) : 0,
       bestInfiniteDistanceM:
         Number.isFinite(Number(parsed.bestInfiniteDistanceM)) &&
@@ -150,6 +158,13 @@ export function saveSteeringSensitivity(steeringSensitivity: number): SavedProgr
 export function saveGraphicsQuality(graphicsQuality: GraphicsQuality): SavedProgress {
   const current = loadProgress();
   current.graphicsQuality = graphicsQuality;
+  saveProgress(current);
+  return current;
+}
+
+export function saveCameraMode(cameraMode: CameraMode): SavedProgress {
+  const current = loadProgress();
+  current.cameraMode = cameraMode;
   saveProgress(current);
   return current;
 }

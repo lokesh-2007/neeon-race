@@ -23,6 +23,7 @@ import {
   loadProgress,
   recordInfiniteCompletion,
   recordLevelCompletion,
+  saveCameraMode,
   saveGarageConfig,
   saveGhostEnabled,
   saveGraphicsQuality,
@@ -30,6 +31,7 @@ import {
   saveSteeringSensitivity,
 } from './game/storage';
 import {
+  CameraMode,
   DailyMissionDefinition,
   GarageConfig,
   GraphicsQuality,
@@ -56,8 +58,11 @@ const INITIAL_HUD: HudTelemetry = {
   respawns: 0,
   lastCheckpointFlash: 0,
   hazardHitFlash: 0,
+  cameraMode: 'chase',
   infiniteStats: null,
 };
+
+const CAMERA_ORDER: CameraMode[] = ['chase', 'cockpit', 'birds-eye'];
 
 export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -102,6 +107,7 @@ export default function App() {
       initialSave.steeringSensitivity,
       initialSave.ghostEnabled,
       initialSave.graphicsQuality,
+      initialSave.cameraMode,
       {
         onHudUpdate: (nextHud) => {
           setHud(nextHud);
@@ -214,6 +220,14 @@ export default function App() {
             setScreen('playing');
           }
         },
+        onCameraCycle: () => {
+          setSaveData((prev) => {
+            const idx = CAMERA_ORDER.indexOf(prev.cameraMode);
+            const next = CAMERA_ORDER[(idx + 1) % CAMERA_ORDER.length];
+            engine.setCameraMode(next);
+            return saveCameraMode(next);
+          });
+        },
         onContextLost: (lost) => {
           setContextLost(lost);
         },
@@ -241,6 +255,15 @@ export default function App() {
       const nextGhost = !prev.ghostEnabled;
       engineRef.current?.setGhostEnabled(nextGhost);
       return saveGhostEnabled(nextGhost);
+    });
+  }, []);
+
+  const handleCycleCamera = useCallback(() => {
+    setSaveData((prev) => {
+      const idx = CAMERA_ORDER.indexOf(prev.cameraMode);
+      const next = CAMERA_ORDER[(idx + 1) % CAMERA_ORDER.length];
+      engineRef.current?.setCameraMode(next);
+      return saveCameraMode(next);
     });
   }, []);
 
@@ -457,6 +480,7 @@ export default function App() {
           ghostEnabled={saveData.ghostEnabled}
           onToggleMute={handleToggleMute}
           onToggleGhost={handleToggleGhost}
+          onCycleCamera={handleCycleCamera}
           onRespawn={() => engineRef.current?.respawnAtCheckpoint()}
           onRestart={() => engineRef.current?.restartLevel()}
           onPause={() => handleOpenScreen('paused')}

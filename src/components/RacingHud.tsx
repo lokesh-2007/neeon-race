@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
+  Camera,
   ChevronLeft,
   ChevronRight,
   Coins,
@@ -16,7 +17,19 @@ import {
   VolumeX,
   Zap,
 } from 'lucide-react';
-import { FATAL_TRAP_SPEED_KMH, HudTelemetry, InputState, LevelDefinition } from '../game/types';
+import {
+  CameraMode,
+  FATAL_TRAP_SPEED_KMH,
+  HudTelemetry,
+  InputState,
+  LevelDefinition,
+} from '../game/types';
+
+const CAMERA_META: Record<CameraMode, { short: string; full: string }> = {
+  chase: { short: 'Chase', full: 'Dynamic Action Chase' },
+  cockpit: { short: 'Cockpit', full: 'First-Person Cockpit' },
+  'birds-eye': { short: "Bird's-Eye", full: "Bird's-Eye View" },
+};
 
 interface RacingHudProps {
   level: LevelDefinition;
@@ -25,6 +38,7 @@ interface RacingHudProps {
   ghostEnabled: boolean;
   onToggleMute: () => void;
   onToggleGhost: () => void;
+  onCycleCamera: () => void;
   onRespawn: () => void;
   onRestart: () => void;
   onPause: () => void;
@@ -46,6 +60,7 @@ export const RacingHud: React.FC<RacingHudProps> = ({
   ghostEnabled,
   onToggleMute,
   onToggleGhost,
+  onCycleCamera,
   onRespawn,
   onRestart,
   onPause,
@@ -53,6 +68,8 @@ export const RacingHud: React.FC<RacingHudProps> = ({
 }) => {
   const [showTouch, setShowTouch] = useState(false);
   const [nowMs, setNowMs] = useState(() => performance.now());
+  const [lastCameraFlash, setLastCameraFlash] = useState(0);
+  const prevCameraRef = useRef<CameraMode>(hud.cameraMode);
 
   useEffect(() => {
     const isTouch =
@@ -60,6 +77,15 @@ export const RacingHud: React.FC<RacingHudProps> = ({
       ('ontouchstart' in window || navigator.maxTouchPoints > 0 || window.innerWidth < 768);
     setShowTouch(isTouch);
   }, []);
+
+  useEffect(() => {
+    if (prevCameraRef.current !== hud.cameraMode) {
+      prevCameraRef.current = hud.cameraMode;
+      const t = performance.now();
+      setLastCameraFlash(t);
+      setNowMs(t);
+    }
+  }, [hud.cameraMode]);
 
   const inf = hud.infiniteStats;
   const ringFlashMs = inf?.lastRingFlash ?? 0;
@@ -70,17 +96,20 @@ export const RacingHud: React.FC<RacingHudProps> = ({
       performance.now() - hud.lastCheckpointFlash < 1600 ||
       performance.now() - hud.hazardHitFlash < 700 ||
       performance.now() - ringFlashMs < 1500 ||
-      performance.now() - sectorFlashMs < 2000
+      performance.now() - sectorFlashMs < 2000 ||
+      performance.now() - lastCameraFlash < 1500
     ) {
       const id = window.setTimeout(() => setNowMs(performance.now()), 120);
       return () => window.clearTimeout(id);
     }
-  }, [hud.lastCheckpointFlash, hud.hazardHitFlash, ringFlashMs, sectorFlashMs, nowMs]);
+  }, [hud.lastCheckpointFlash, hud.hazardHitFlash, ringFlashMs, sectorFlashMs, lastCameraFlash, nowMs]);
 
   const cpFlashing = nowMs - hud.lastCheckpointFlash < 1400;
   const hitFlashing = nowMs - hud.hazardHitFlash < 500;
   const ringFlashing = Boolean(inf && nowMs - ringFlashMs < 1300);
   const sectorFlashing = Boolean(inf && nowMs - sectorFlashMs < 1900);
+  const cameraFlashing = nowMs - lastCameraFlash < 1350;
+  const camMeta = CAMERA_META[hud.cameraMode];
 
   const bindHold = (control: keyof InputState) => ({
     onContextMenu: (e: React.MouseEvent<HTMLButtonElement>) => e.preventDefault(),
@@ -202,7 +231,7 @@ export const RacingHud: React.FC<RacingHudProps> = ({
             </div>
           </div>
 
-          {/* Center Transient Banner (Sector / Ring / Checkpoint) */}
+          {/* Center Transient Banner (Sector / Ring / Checkpoint / Camera) */}
           {sectorFlashing && inf ? (
             <div className="hidden lg:flex items-center rounded-lg border border-fuchsia-400/60 bg-[#14071d]/90 px-4 py-2 text-sm font-semibold tracking-wide text-fuchsia-300">
               Sector {inf.sector} · {inf.roadLabel} · {inf.groundLabel}
@@ -215,10 +244,26 @@ export const RacingHud: React.FC<RacingHudProps> = ({
             <div className="hidden lg:flex items-center rounded-lg border border-[#39ff14]/50 bg-[#07150b]/90 px-4 py-2 text-sm font-semibold tracking-wide text-[#39ff14]">
               Checkpoint Activated · Nitro Recharged
             </div>
+          ) : cameraFlashing ? (
+            <div className="hidden lg:flex items-center gap-2 rounded-lg border border-cyan-400/60 bg-[#06121d]/90 px-4 py-2 text-sm font-semibold tracking-wide text-cyan-200">
+              <Camera className="h-4 w-4 text-cyan-300" />
+              <span>{camMeta.full}</span>
+            </div>
           ) : null}
 
           {/* Top-Right: Quick Actions */}
-          <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={onCycleCamera}
+              title={`Camera: ${camMeta.full} (C)`}
+              aria-label={`Switch camera (${camMeta.full})`}
+              className="flex h-9 items-center gap-1.5 rounded-lg border border-cyan-400/50 bg-[#070913]/85 px-2.5 text-xs font-medium text-cyan-200 transition-colors hover:border-cyan-300 hover:bg-cyan-500/20 whitespace-nowrap shrink-0 cursor-pointer sm:h-10 sm:px-3"
+            >
+              <Camera className="h-4 w-4 text-cyan-300" />
+              <span className="hidden md:inline">{camMeta.short}</span>
+            </button>
+
             {!inf && (
               <button
                 type="button"
@@ -300,6 +345,11 @@ export const RacingHud: React.FC<RacingHudProps> = ({
         ) : cpFlashing ? (
           <div className="mx-auto flex lg:hidden items-center rounded-lg border border-[#39ff14]/50 bg-[#07150b]/90 px-3 py-1 text-xs font-semibold text-[#39ff14]">
             Checkpoint · Nitro Recharged
+          </div>
+        ) : cameraFlashing ? (
+          <div className="mx-auto flex lg:hidden items-center gap-1.5 rounded-lg border border-cyan-400/60 bg-[#06121d]/90 px-3 py-1 text-xs font-semibold text-cyan-200">
+            <Camera className="h-3.5 w-3.5 text-cyan-300" />
+            <span>{camMeta.full}</span>
           </div>
         ) : null}
 
@@ -383,6 +433,8 @@ export const RacingHud: React.FC<RacingHudProps> = ({
             <span>Space: Nitro</span>
             <span aria-hidden="true">·</span>
             <span>Shift: Jump</span>
+            <span aria-hidden="true">·</span>
+            <span>C: Camera</span>
             <span aria-hidden="true">·</span>
             <span>R: Respawn</span>
             <span aria-hidden="true">·</span>

@@ -8,6 +8,7 @@ import { InfiniteTrackManager } from './InfiniteTrackManager';
 import { LEVELS } from './levels';
 import { buildTrack, BuiltTrack } from './TrackBuilder';
 import {
+  CameraMode,
   CrashEvent,
   EnvironmentalEventHud,
   EnvironmentalEventType,
@@ -79,6 +80,7 @@ export interface EngineCallbacks {
     } | null,
   ) => void;
   onPauseToggle: () => void;
+  onCameraCycle: () => void;
   onContextLost: (lost: boolean) => void;
 }
 
@@ -269,6 +271,7 @@ export class GameEngine {
   private particleColorDirty = false;
 
   private mode: ScreenMode = 'title';
+  private cameraMode: CameraMode = 'chase';
   private orbitAngle = 0.6;
   private runElapsedSec = 0;
   private clock = new THREE.Clock();
@@ -314,6 +317,7 @@ export class GameEngine {
     initialSensitivity: number,
     initialGhostEnabled: boolean,
     initialQuality: GraphicsQuality,
+    initialCameraMode: CameraMode,
     callbacks: EngineCallbacks,
   ) {
     this.container = container;
@@ -321,6 +325,7 @@ export class GameEngine {
     this.currentGarage = initialGarage;
     this.ghostEnabled = initialGhostEnabled;
     this.qualityMode = initialQuality;
+    this.cameraMode = initialCameraMode;
     this.audio = new AudioSynth(initialMuted);
 
     this.isSoftwareGl = detectSoftwareWebGL();
@@ -619,6 +624,10 @@ export class GameEngine {
       this.audio.playImpact();
       return;
     }
+    if (e.code === 'KeyC' && this.mode === 'playing' && !e.repeat) {
+      this.callbacks.onCameraCycle();
+      return;
+    }
     const mapped = this.keyMap[e.code];
     if (mapped) {
       if (e.code === 'Space' || e.code.startsWith('Arrow')) {
@@ -659,6 +668,11 @@ export class GameEngine {
     if (!enabled && this.ghostVisuals) {
       this.ghostVisuals.root.visible = false;
     }
+    this.emitHud();
+  }
+
+  public setCameraMode(mode: CameraMode): void {
+    this.cameraMode = mode;
     this.emitHud();
   }
 
@@ -1010,6 +1024,7 @@ export class GameEngine {
       respawns: this.vehicle.respawns,
       lastCheckpointFlash: this.vehicle.lastCheckpointFlash,
       hazardHitFlash: this.vehicle.hazardHitFlash,
+      cameraMode: this.cameraMode,
       infiniteStats: this.infiniteMode
         ? {
             distanceM: this.infiniteDistanceM,
@@ -1374,26 +1389,65 @@ export class GameEngine {
         );
       }
 
-      // Smooth damped chase camera (follows car local up through loops!)
-      const followDist = this.vehicle.boosting ? 10.6 : 9.4;
-      const followHeight = 3.7;
-      _camTargetPos
-        .copy(this.vehicle.position)
-        .addScaledVector(_carFwd, -followDist)
-        .addScaledVector(_carUp, followHeight);
+      // Perspective-aware smooth camera rig (Cockpit, Dynamic Chase, Bird's-Eye)
+      const portraitBoost =
+        this.camera.aspect < 1 ? Math.min(20, (1 - this.camera.aspect) * 32) : 0;
+      let targetFov = 70 + portraitBoost;
 
-      this.camera.position.lerp(_camTargetPos, 1 - Math.exp(-10 * dt));
-      this.camera.up.lerp(_carUp, 1 - Math.exp(-8 * dt)).normalize();
-      _camLookAt.copy(this.vehicle.position).addScaledVector(_carFwd, 8);
-      this.camera.lookAt(_camLookAt);
+      if (this.cameraMode === 'cockpit') {
+        _camTargetPos
+          .copy(this.vehicle.position)
+          .addScaledVector(_carFwd, 0.98)
+          .addScaledVector(_carUp, 1.46);
+        this.camera.position.copy(_camTargetPos);
+        this.camera.up.lerp(_carUp, 1 - Math.exp(-15 * dt)).normalize();
+        _camLookAt
+          .copy(this.vehicle.position)
+          .addScaledVector(_carFwd, 38)
+          .addScaledVector(_carUp, 1.05);
+        this.camera.lookAt(_camLookAt);
+        targetFov =
+          78 +
+          portraitBoost +
+          Math.min(14, (this.vehicle.getSpeed() / 85) * 12) +
+          (this.vehicle.boosting ? 7 : 0);
+      } else if (this.cameraMode === 'birds-eye') {
+        const followDist = this.vehicle.boosting ? 15.5 : 13.5;
+        const followHeight = 27.0;
+        _camTargetPos
+          .copy(this.vehicle.position)
+          .addScaledVector(_carFwd, -followDist)
+          .addScaledVector(_carUp, followHeight);
+        this.camera.position.lerp(_camTargetPos, 1 - Math.exp(-8 * dt));
+        this.camera.up.lerp(_carUp, 1 - Math.exp(-6 * dt)).normalize();
+        _camLookAt.copy(this.vehicle.position).addScaledVector(_carFwd, 16);
+        this.camera.lookAt(_camLookAt);
+        targetFov =
+          64 +
+          portraitBoost +
+          Math.min(8, (this.vehicle.getSpeed() / 85) * 7) +
+          (this.vehicle.boosting ? 4 : 0);
+      } else {
+        // Dynamic Action Chase (follows car local up through loops & twists!)
+        const followDist = this.vehicle.boosting ? 10.6 : 9.4;
+        const followHeight = 3.7;
+        _camTargetPos
+          .copy(this.vehicle.position)
+          .addScaledVector(_carFwd, -followDist)
+          .addScaledVector(_carUp, followHeight);
 
-      // Dynamic FOV kick with speed / boost + portrait phone FOV compensation
-      const portraitBoost = this.camera.aspect < 1 ? Math.min(20, (1 - this.camera.aspect) * 32) : 0;
-      const targetFov =
-        70 +
-        portraitBoost +
-        Math.min(16, (this.vehicle.getSpeed() / 85) * 14) +
-        (this.vehicle.boosting ? 6 : 0);
+        this.camera.position.lerp(_camTargetPos, 1 - Math.exp(-10 * dt));
+        this.camera.up.lerp(_carUp, 1 - Math.exp(-8 * dt)).normalize();
+        _camLookAt.copy(this.vehicle.position).addScaledVector(_carFwd, 8);
+        this.camera.lookAt(_camLookAt);
+
+        targetFov =
+          70 +
+          portraitBoost +
+          Math.min(16, (this.vehicle.getSpeed() / 85) * 14) +
+          (this.vehicle.boosting ? 6 : 0);
+      }
+
       if (Math.abs(this.camera.fov - targetFov) > 0.05) {
         this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 7, dt);
         this.camera.updateProjectionMatrix();

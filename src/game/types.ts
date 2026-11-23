@@ -2,6 +2,7 @@ import * as THREE from 'three';
 
 export type ScreenMode = 'title' | 'levels' | 'garage' | 'playing' | 'paused' | 'victory';
 export type GraphicsQuality = 'auto' | 'high' | 'eco';
+export type CameraMode = 'chase' | 'cockpit' | 'birds-eye';
 
 export type ChassisId =
   | 'interceptor'
@@ -119,6 +120,7 @@ export interface SavedProgress {
   ghostEnabled: boolean;
   steeringSensitivity: number; // 0.4 to 1.8 (1.0 default)
   graphicsQuality: GraphicsQuality;
+  cameraMode: CameraMode;
   totalCoins: number;
   bestInfiniteDistanceM: number;
   bestInfiniteSector: number;
@@ -348,6 +350,7 @@ export interface HudTelemetry {
   respawns: number;
   lastCheckpointFlash: number;
   hazardHitFlash: number;
+  cameraMode: CameraMode;
   infiniteStats: InfiniteHudStats | null;
 }
 
