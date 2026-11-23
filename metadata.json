@@ -1,0 +1,6 @@
+{
+  "name": "Neon Challenge Legends",
+  "description": "A high-speed 3D cyberpunk arcade stunt driving and obstacle course game with neon loops, mega ramps, procedural synthwave audio, and customizable vehicles.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
