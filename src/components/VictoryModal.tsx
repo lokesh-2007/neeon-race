@@ -1,6 +1,6 @@
 import React from 'react';
-import { ArrowRight, Coins, Ghost, RotateCcw, Trophy } from 'lucide-react';
-import { LevelDefinition } from '../game/types';
+import { ArrowRight, Coins, Ghost, RotateCcw, Target, Trophy } from 'lucide-react';
+import { DailyMissionDefinition, LevelDefinition } from '../game/types';
 import { formatTimeSec } from './RacingHud';
 
 interface VictoryModalProps {
@@ -11,6 +11,7 @@ interface VictoryModalProps {
   totalCoins: number;
   medal: 'gold' | 'silver' | 'bronze';
   isNewBest: boolean;
+  newlyCompletedMissions: DailyMissionDefinition[];
   hasNextLevel: boolean;
   onNextLevel: () => void;
   onRetry: () => void;
@@ -31,6 +32,7 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
   totalCoins,
   medal,
   isNewBest,
+  newlyCompletedMissions,
   hasNextLevel,
   onNextLevel,
   onRetry,
@@ -89,6 +91,28 @@ export const VictoryModal: React.FC<VictoryModalProps> = ({
             <span className="tabular-nums">Respawns: {respawns}</span>
           </div>
         </div>
+
+        {newlyCompletedMissions.length > 0 && (
+          <div className="mt-3.5 rounded-xl border border-amber-400/40 bg-amber-500/10 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+              <Target className="h-3.5 w-3.5" />
+              <span>Daily Mission Completed · Claim in Main Menu</span>
+            </div>
+            <div className="mt-1.5 space-y-1">
+              {newlyCompletedMissions.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-center justify-between text-xs text-slate-200"
+                >
+                  <span className="truncate">{m.title}</span>
+                  <span className="font-semibold text-amber-300 tabular-nums">
+                    +{m.rewardCoins}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Actions */}
         <div className="mt-6 flex flex-col gap-2.5 sm:flex-row">

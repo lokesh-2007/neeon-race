@@ -769,6 +769,163 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     });
   };
 
+  const addBarrierObstacleAt = (
+    sample: FrameSample,
+    cfg: { speed?: number; phase?: number },
+  ) => {
+    const halfW = sample.width * 0.5;
+    const speed = cfg.speed ?? 1.9;
+    const phase = cfg.phase ?? 0;
+
+    const basis = new THREE.Matrix4().makeBasis(
+      sample.right,
+      sample.up,
+      sample.forward.clone().negate(),
+    );
+
+    const container = new THREE.Group();
+    container.quaternion.setFromRotationMatrix(basis);
+    container.position.copy(sample.pos);
+
+    const blockW = Math.max(4.5, sample.width * 0.26);
+    const blockGeo = new THREE.BoxGeometry(blockW, 2.6, 1.4);
+    const trimGeo = new THREE.BoxGeometry(blockW + 0.14, 0.24, 1.48);
+    const hullMat = new THREE.MeshStandardMaterial({
+      color: 0x15192d,
+      metalness: 0.85,
+      roughness: 0.22,
+    });
+    const glowMat = new THREE.MeshStandardMaterial({
+      color: 0xff2a55,
+      emissive: 0xff0055,
+      emissiveIntensity: 2.8,
+      roughness: 0.2,
+    });
+    disposables.push(blockGeo, trimGeo, hullMat, glowMat);
+
+    const leftGate = new THREE.Group();
+    leftGate.position.set(-halfW + blockW * 0.5, 1.3, 0);
+    leftGate.add(new THREE.Mesh(blockGeo, hullMat));
+    const leftTrim = new THREE.Mesh(trimGeo, glowMat);
+    leftTrim.position.y = 1.25;
+    leftGate.add(leftTrim);
+
+    const rightGate = new THREE.Group();
+    rightGate.position.set(halfW - blockW * 0.5, 1.3, 0);
+    rightGate.add(new THREE.Mesh(blockGeo, hullMat));
+    const rightTrim = new THREE.Mesh(trimGeo, glowMat);
+    rightTrim.position.y = 1.25;
+    rightGate.add(rightTrim);
+
+    container.add(leftGate, rightGate);
+    group.add(container);
+    container.updateMatrixWorld(true);
+
+    const pL0 = new THREE.Vector3();
+    const pL1 = new THREE.Vector3();
+    const pR0 = new THREE.Vector3();
+    const pR1 = new THREE.Vector3();
+    const closest = new THREE.Vector3();
+
+    obstacles.push({
+      type: 'barrier',
+      update: (elapsed: number) => {
+        // Rhythmically opens center or pinches toward center leaving outer lanes clear
+        const t = 0.5 + 0.5 * Math.sin(elapsed * speed + phase);
+        const offset = THREE.MathUtils.lerp(halfW - blockW * 0.52, blockW * 0.56 + 1.4, t);
+        leftGate.position.x = -offset;
+        rightGate.position.x = offset;
+
+        pL0.set(-offset - blockW * 0.48, 1.1, 0).applyMatrix4(container.matrixWorld);
+        pL1.set(-offset + blockW * 0.48, 1.1, 0).applyMatrix4(container.matrixWorld);
+        pR0.set(offset - blockW * 0.48, 1.1, 0).applyMatrix4(container.matrixWorld);
+        pR1.set(offset + blockW * 0.48, 1.1, 0).applyMatrix4(container.matrixWorld);
+      },
+      checkCollision: (carPos, carRadius, outPush) => {
+        const hitR = carRadius + 0.72;
+        if (distToSegmentSq(carPos, pL0, pL1, closest) < hitR * hitR) {
+          outPush.copy(carPos).sub(closest).normalize();
+          return true;
+        }
+        if (distToSegmentSq(carPos, pR0, pR1, closest) < hitR * hitR) {
+          outPush.copy(carPos).sub(closest).normalize();
+          return true;
+        }
+        return false;
+      },
+    });
+  };
+
+  const addSpinnerObstacleAt = (
+    sample: FrameSample,
+    cfg: { speed?: number; phase?: number },
+  ) => {
+    const armHalf = Math.min(8.5, sample.width * 0.36);
+    const speed = cfg.speed ?? 1.85;
+    const phase = cfg.phase ?? 0;
+
+    const basis = new THREE.Matrix4().makeBasis(
+      sample.right,
+      sample.up,
+      sample.forward.clone().negate(),
+    );
+
+    const container = new THREE.Group();
+    container.quaternion.setFromRotationMatrix(basis);
+    container.position.copy(sample.pos);
+
+    const hubMat = new THREE.MeshStandardMaterial({
+      color: 0x161b2e,
+      metalness: 0.85,
+      roughness: 0.25,
+    });
+    const bladeMat = new THREE.MeshStandardMaterial({
+      color: 0x00f3ff,
+      emissive: 0x00f3ff,
+      emissiveIntensity: 3.1,
+      roughness: 0.15,
+    });
+    const hubGeo = new THREE.CylinderGeometry(1.1, 1.35, 2.4, 12);
+    const bladeGeo = new THREE.CylinderGeometry(0.24, 0.24, armHalf * 2, 10);
+    bladeGeo.rotateZ(Math.PI / 2);
+    disposables.push(hubMat, bladeMat, hubGeo, bladeGeo);
+
+    const hub = new THREE.Mesh(hubGeo, hubMat);
+    hub.position.y = 1.2;
+    const rotor = new THREE.Group();
+    rotor.position.y = 1.35;
+    const blade = new THREE.Mesh(bladeGeo, bladeMat);
+    rotor.add(blade);
+
+    container.add(hub, rotor);
+    group.add(container);
+    container.updateMatrixWorld(true);
+
+    const pA = new THREE.Vector3();
+    const pB = new THREE.Vector3();
+    const closest = new THREE.Vector3();
+
+    obstacles.push({
+      type: 'spinner',
+      update: (elapsed: number) => {
+        const ang = elapsed * speed + phase;
+        rotor.rotation.y = ang;
+        rotor.updateMatrixWorld(true);
+        pA.set(-armHalf, 0, 0).applyMatrix4(rotor.matrixWorld);
+        pB.set(armHalf, 0, 0).applyMatrix4(rotor.matrixWorld);
+      },
+      checkCollision: (carPos, carRadius, outPush) => {
+        const dSq = distToSegmentSq(carPos, pA, pB, closest);
+        const hitR = carRadius + 0.45;
+        if (dSq < hitR * hitR) {
+          outPush.copy(carPos).sub(closest).normalize();
+          return true;
+        }
+        return false;
+      },
+    });
+  };
+
   let checkpointCounter = 0;
 
   // Step through level pieces to construct spline frames and attach features
@@ -835,13 +992,30 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
           addHammerObstacleAt(sampleAtT(pieceSamples, h.t), h);
         }
       }
+      if (piece.barriers) {
+        for (const b of piece.barriers) {
+          addBarrierObstacleAt(sampleAtT(pieceSamples, b.t), b);
+        }
+      }
+      if (piece.spinners) {
+        for (const sp of piece.spinners) {
+          addSpinnerObstacleAt(sampleAtT(pieceSamples, sp.t), sp);
+        }
+      }
       if (piece.length >= 60) {
-        const hasHazard = Boolean((piece.lasers && piece.lasers.length) || (piece.hammers && piece.hammers.length));
+        const hasHazard = Boolean(
+          (piece.lasers && piece.lasers.length) ||
+            (piece.hammers && piece.hammers.length) ||
+            (piece.barriers && piece.barriers.length) ||
+            (piece.spinners && piece.spinners.length),
+        );
+        const straightCoins = Math.min(8, Math.max(4, Math.floor(piece.length / 52)));
         if (!hasHazard) {
-          addCoinRowAt(pieceSamples, 0.35, 0.75, 4, 0, 0);
+          addCoinRowAt(pieceSamples, 0.22, 0.8, straightCoins, 0, 0);
         } else {
-          addCoinRowAt(pieceSamples, 0.14, 0.28, 2, 0, 0);
-          addCoinRowAt(pieceSamples, 0.76, 0.88, 2, 0, 0);
+          const halfCoins = Math.max(2, Math.floor(straightCoins * 0.5));
+          addCoinRowAt(pieceSamples, 0.1, 0.24, halfCoins, 0, 0);
+          addCoinRowAt(pieceSamples, 0.78, 0.92, halfCoins, 0, 0);
         }
       }
     } else if (piece.type === 'curve') {

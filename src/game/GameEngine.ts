@@ -50,6 +50,7 @@ export interface EngineCallbacks {
     timeMs: number,
     respawns: number,
     coinsCollected: number,
+    airborneSec: number,
     ghostRun: GhostRun,
   ) => void;
   onPauseToggle: () => void;
@@ -899,6 +900,7 @@ export class GameEngine {
           Math.round(this.runElapsedSec * 1000),
           this.vehicle.respawns,
           this.vehicle.coinsCollected,
+          this.vehicle.airborneSec,
           {
             chassisId: this.currentGarage.chassisId,
             gliderId: this.currentGarage.gliderId,

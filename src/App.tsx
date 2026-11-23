@@ -9,6 +9,7 @@ import {
   VolumeX,
   Wrench,
 } from 'lucide-react';
+import { DailyMissionsPanel } from './components/DailyMissionsPanel';
 import { GarageDock } from './components/GarageDock';
 import { LevelSelectModal } from './components/LevelSelectModal';
 import { RacingHud } from './components/RacingHud';
@@ -16,6 +17,7 @@ import { VictoryModal } from './components/VictoryModal';
 import { GameEngine } from './game/GameEngine';
 import { LEVELS } from './game/levels';
 import {
+  claimDailyMissionReward,
   loadProgress,
   recordLevelCompletion,
   saveGarageConfig,
@@ -24,6 +26,7 @@ import {
   saveSteeringSensitivity,
 } from './game/storage';
 import {
+  DailyMissionDefinition,
   GarageConfig,
   HudTelemetry,
   InputState,
@@ -66,6 +69,7 @@ export default function App() {
     coinsCollected: number;
     medal: 'gold' | 'silver' | 'bronze';
     isNewBest: boolean;
+    newlyCompletedMissions: DailyMissionDefinition[];
   } | null>(null);
 
   const activeLevelRef = useRef<LevelDefinition>(activeLevel);
@@ -89,13 +93,15 @@ export default function App() {
         onHudUpdate: (nextHud) => {
           setHud(nextHud);
         },
-        onLevelComplete: (timeMs, respawns, coinsCollected, ghostRun) => {
+        onLevelComplete: (timeMs, respawns, coinsCollected, airborneSec, ghostRun) => {
           const lvl = activeLevelRef.current;
           const res = recordLevelCompletion(
             lvl.id,
             timeMs,
             lvl.parTimes,
             coinsCollected,
+            respawns,
+            airborneSec,
             ghostRun,
           );
           setSaveData(res.progress);
@@ -105,6 +111,7 @@ export default function App() {
             coinsCollected,
             medal: res.medal,
             isNewBest: res.isNewBest,
+            newlyCompletedMissions: res.newlyCompletedMissions,
           });
           setScreen('victory');
         },
@@ -156,6 +163,15 @@ export default function App() {
   const handleChangeSensitivity = useCallback((val: number) => {
     engineRef.current?.setSteeringSensitivity(val);
     setSaveData(saveSteeringSensitivity(val));
+  }, []);
+
+  const handleClaimMission = useCallback((missionId: string) => {
+    const res = claimDailyMissionReward(missionId);
+    setSaveData(res.progress);
+    if (res.rewardCoins > 0) {
+      engineRef.current?.audio.unlock();
+      engineRef.current?.audio.playCoin();
+    }
   }, []);
 
   const handleStartLevel = useCallback((level: LevelDefinition) => {
@@ -243,6 +259,14 @@ export default function App() {
                 )}
               </button>
             </div>
+          </div>
+
+          {/* Middle Right-Aligned Daily Missions Panel */}
+          <div className="flex min-h-0 flex-1 items-start justify-end py-3 md:items-center">
+            <DailyMissionsPanel
+              dailyMissions={saveData.dailyMissions}
+              onClaimReward={handleClaimMission}
+            />
           </div>
 
           {/* Bottom Unified Action Dock */}
@@ -424,6 +448,7 @@ export default function App() {
           totalCoins={saveData.totalCoins}
           medal={victoryInfo.medal}
           isNewBest={victoryInfo.isNewBest}
+          newlyCompletedMissions={victoryInfo.newlyCompletedMissions}
           hasNextLevel={hasNextLevel}
           onNextLevel={() => handleStartLevel(LEVELS[activeLevelIdx + 1])}
           onRetry={() => handleStartLevel(activeLevel)}

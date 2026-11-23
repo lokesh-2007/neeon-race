@@ -831,6 +831,7 @@ export class VehicleController {
 
   public currentCheckpoint = 0;
   public coinsCollected = 0;
+  public airborneSec = 0;
   public respawns = 0;
   public lastCheckpointFlash = 0;
   public hazardHitFlash = 0;
@@ -899,6 +900,7 @@ export class VehicleController {
 
     this.currentCheckpoint = 0;
     this.coinsCollected = 0;
+    this.airborneSec = 0;
     this.respawns = 0;
     this.nitro = 100;
     this.boostPadTimer = 0;
@@ -1112,6 +1114,7 @@ export class VehicleController {
       // Airborne & Glider physics
       this.grounded = false;
       this.airborne = true;
+      this.airborneSec += safeDt;
       this.drifting = false;
       this.steerVisual = THREE.MathUtils.damp(this.steerVisual, 0, 8, safeDt);
 

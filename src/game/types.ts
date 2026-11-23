@@ -74,6 +74,31 @@ export interface GhostRun {
   frames: GhostFrame[];
 }
 
+export type MissionMetric =
+  | 'levels_finished'
+  | 'single_run_coins'
+  | 'total_coins_today'
+  | 'zero_respawn_finish'
+  | 'gold_medal_finish'
+  | 'mega_level_finish'
+  | 'single_run_airborne_sec';
+
+export interface DailyMissionDefinition {
+  id: string;
+  title: string;
+  description: string;
+  metric: MissionMetric;
+  target: number;
+  rewardCoins: number;
+}
+
+export interface DailyMissionsSave {
+  dateKey: string;
+  missionIds: string[];
+  progress: Record<string, number>;
+  claimed: Record<string, boolean>;
+}
+
 export interface SavedProgress {
   bestTimes: Record<string, LevelBestRecord>;
   ghostRuns: Record<string, GhostRun>;
@@ -82,6 +107,7 @@ export interface SavedProgress {
   ghostEnabled: boolean;
   steeringSensitivity: number; // 0.4 to 1.8 (1.0 default)
   totalCoins: number;
+  dailyMissions: DailyMissionsSave;
 }
 
 export type TrackPiece =
@@ -94,6 +120,8 @@ export type TrackPiece =
       checkpoint?: boolean;
       lasers?: { t: number; mode: 'sweep' | 'pulse'; speed?: number; phase?: number }[];
       hammers?: { t: number; speed?: number; phase?: number }[];
+      barriers?: { t: number; speed?: number; phase?: number }[];
+      spinners?: { t: number; speed?: number; phase?: number }[];
     }
   | {
       type: 'curve';
@@ -186,7 +214,7 @@ export interface CheckpointGate {
 }
 
 export interface MovingObstacle {
-  type: 'laser' | 'hammer';
+  type: 'laser' | 'hammer' | 'barrier' | 'spinner';
   update: (elapsed: number) => void;
   checkCollision: (carPos: THREE.Vector3, carRadius: number, outPush: THREE.Vector3) => boolean;
 }
