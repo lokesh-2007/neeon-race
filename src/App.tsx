@@ -22,12 +22,14 @@ import {
   recordLevelCompletion,
   saveGarageConfig,
   saveGhostEnabled,
+  saveGraphicsQuality,
   saveMutePreference,
   saveSteeringSensitivity,
 } from './game/storage';
 import {
   DailyMissionDefinition,
   GarageConfig,
+  GraphicsQuality,
   HudTelemetry,
   InputState,
   LevelDefinition,
@@ -89,6 +91,7 @@ export default function App() {
       initialSave.muted,
       initialSave.steeringSensitivity,
       initialSave.ghostEnabled,
+      initialSave.graphicsQuality,
       {
         onHudUpdate: (nextHud) => {
           setHud(nextHud);
@@ -165,6 +168,11 @@ export default function App() {
     setSaveData(saveSteeringSensitivity(val));
   }, []);
 
+  const handleChangeQuality = useCallback((quality: GraphicsQuality) => {
+    engineRef.current?.setGraphicsQuality(quality);
+    setSaveData(saveGraphicsQuality(quality));
+  }, []);
+
   const handleClaimMission = useCallback((missionId: string) => {
     const res = claimDailyMissionReward(missionId);
     setSaveData(res.progress);
@@ -226,7 +234,7 @@ export default function App() {
 
       {/* Title Screen Overlay (leaves center 3D car showcase unobstructed) */}
       {screen === 'title' && (
-        <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-4 sm:p-8">
+        <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-4 sm:p-8 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
           {/* Top Header */}
           <div className="flex items-start justify-between gap-3">
             <div className="pointer-events-auto max-w-xl">
@@ -321,9 +329,11 @@ export default function App() {
         <GarageDock
           garage={saveData.garage}
           steeringSensitivity={saveData.steeringSensitivity}
+          graphicsQuality={saveData.graphicsQuality}
           totalCoins={saveData.totalCoins}
           onChangeGarage={handleChangeGarage}
           onChangeSensitivity={handleChangeSensitivity}
+          onChangeQuality={handleChangeQuality}
           onClose={() => handleOpenScreen('title')}
           onRace={() => handleStartLevel(activeLevel)}
         />
@@ -393,6 +403,26 @@ export default function App() {
                 >
                   {saveData.ghostEnabled ? 'Enabled' : 'Disabled'}
                 </button>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-white/10 pt-2.5 text-xs">
+                <span className="font-medium text-slate-300">Graphics</span>
+                <div className="flex items-center gap-1">
+                  {(['auto', 'high', 'eco'] as const).map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => handleChangeQuality(q)}
+                      className={`rounded-md border px-2 py-1 text-[11px] font-semibold uppercase transition-colors cursor-pointer ${
+                        saveData.graphicsQuality === q
+                          ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200'
+                          : 'border-white/15 bg-white/5 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

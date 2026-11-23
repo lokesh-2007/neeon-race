@@ -10,6 +10,7 @@ import {
   GarageConfig,
   GhostFrame,
   GhostRun,
+  GraphicsQuality,
   GroundTheme,
   HudTelemetry,
   InputState,
@@ -70,6 +71,12 @@ function detectSoftwareWebGL(): boolean {
   } catch {
     return false;
   }
+}
+
+function detectCompactMobile(): boolean {
+  if (typeof window === 'undefined') return false;
+  const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+  return coarse || Math.min(window.innerWidth, window.innerHeight) < 768;
 }
 
 function getAbyssThemeColors(theme: GroundTheme): {
@@ -175,9 +182,15 @@ export class GameEngine {
   public audio: AudioSynth;
 
   private isSoftwareGl: boolean;
+  private isCompactMobile: boolean;
+  private qualityMode: GraphicsQuality;
+  private useBloom = false;
+  private slowFrameCount = 0;
+
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
+  private keyLight: THREE.DirectionalLight;
   private composer: EffectComposer | null = null;
   private bloomPass: UnrealBloomPass | null = null;
 
@@ -206,6 +219,7 @@ export class GameEngine {
   private particleMesh: THREE.InstancedMesh;
   private particles: ParticleSlot[] = [];
   private particleCursor = 0;
+  private particleColorDirty = false;
 
   private mode: ScreenMode = 'title';
   private orbitAngle = 0.6;
@@ -237,6 +251,8 @@ export class GameEngine {
     KeyD: 'right',
     ArrowRight: 'right',
     Space: 'boost',
+    ShiftLeft: 'boost',
+    ShiftRight: 'boost',
     KeyQ: 'rollLeft',
     KeyE: 'rollRight',
   };
@@ -249,15 +265,18 @@ export class GameEngine {
     initialMuted: boolean,
     initialSensitivity: number,
     initialGhostEnabled: boolean,
+    initialQuality: GraphicsQuality,
     callbacks: EngineCallbacks,
   ) {
     this.container = container;
     this.callbacks = callbacks;
     this.currentGarage = initialGarage;
     this.ghostEnabled = initialGhostEnabled;
+    this.qualityMode = initialQuality;
     this.audio = new AudioSynth(initialMuted);
 
     this.isSoftwareGl = detectSoftwareWebGL();
+    this.isCompactMobile = detectCompactMobile();
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl,
       powerPreference: 'high-performance',
@@ -297,25 +316,28 @@ export class GameEngine {
 
     // 3-Point Cyber Lighting Rig
     const hemi = new THREE.HemisphereLight(0x38bdf8, 0x2e1065, 0.75);
-    const keyLight = new THREE.DirectionalLight(0xe0f2fe, 1.5);
-    keyLight.position.set(45, 95, 35);
+    this.keyLight = new THREE.DirectionalLight(0xe0f2fe, 1.5);
+    this.keyLight.position.set(45, 95, 35);
     if (!this.isSoftwareGl) {
-      keyLight.castShadow = true;
-      keyLight.shadow.mapSize.set(1024, 1024);
-      keyLight.shadow.camera.near = 10;
-      keyLight.shadow.camera.far = 260;
-      keyLight.shadow.camera.left = -80;
-      keyLight.shadow.camera.right = 80;
-      keyLight.shadow.camera.top = 80;
-      keyLight.shadow.camera.bottom = -80;
-      keyLight.shadow.bias = -0.0005;
+      this.keyLight.castShadow = true;
+      this.keyLight.shadow.mapSize.set(
+        this.isCompactMobile ? 512 : 1024,
+        this.isCompactMobile ? 512 : 1024,
+      );
+      this.keyLight.shadow.camera.near = 10;
+      this.keyLight.shadow.camera.far = 220;
+      this.keyLight.shadow.camera.left = -55;
+      this.keyLight.shadow.camera.right = 55;
+      this.keyLight.shadow.camera.top = 55;
+      this.keyLight.shadow.camera.bottom = -55;
+      this.keyLight.shadow.bias = -0.0005;
     }
     const rimLight = new THREE.DirectionalLight(0xff007f, 1.15);
     rimLight.position.set(-50, 35, -70);
-    this.scene.add(hemi, keyLight, rimLight);
+    this.scene.add(hemi, this.keyLight, this.keyLight.target, rimLight);
 
     // Abyss Cyber Grid Floor
-    const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
+    const maxAniso = Math.min(this.isCompactMobile ? 4 : 8, this.renderer.capabilities.getMaxAnisotropy());
     const abyssSetup = createAbyssGridTexture('cyber-grid', maxAniso);
     this.abyssGridTex = abyssSetup.tex;
     this.abyssGridCanvas = abyssSetup.canvas;
@@ -408,18 +430,24 @@ export class GameEngine {
     this.vehicle = new VehicleController(initialGarage, initialSensitivity);
     this.scene.add(this.vehicle.visuals.root);
 
-    // Post-processing UnrealBloomPass (GPU only; skipped on software WebGL)
+    // Post-processing UnrealBloomPass (GPU only; skipped on software WebGL or Eco mode)
     if (!this.isSoftwareGl) {
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
+      const bloomScale = this.isCompactMobile ? 0.5 : 1;
       this.bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(width, height),
+        new THREE.Vector2(
+          Math.max(1, Math.floor(width * bloomScale)),
+          Math.max(1, Math.floor(height * bloomScale)),
+        ),
         0.68, // crisp neon glow strength
         0.45, // radius
         0.72, // threshold
       );
       this.composer.addPass(this.bloomPass);
     }
+
+    this.applyGraphicsQuality(this.qualityMode);
 
     // Load initial Level 1 for showcase background
     this.loadLevel(LEVELS[0], null);
@@ -434,6 +462,8 @@ export class GameEngine {
     window.visualViewport?.addEventListener('resize', this.handleResize);
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
+    window.addEventListener('blur', this.handleWindowBlur);
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost);
     this.renderer.domElement.addEventListener('webglcontextrestored', this.handleContextRestored);
 
@@ -441,8 +471,59 @@ export class GameEngine {
     this.tick();
   }
 
+  private applyGraphicsQuality(quality: GraphicsQuality): void {
+    this.qualityMode = quality;
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, this.container.clientWidth || window.innerWidth);
+    const height = Math.max(1, this.container.clientHeight || window.innerHeight);
+
+    if (this.isSoftwareGl) {
+      this.renderer.setPixelRatio(1);
+      this.renderer.shadowMap.enabled = false;
+      this.keyLight.castShadow = false;
+      this.useBloom = false;
+      return;
+    }
+
+    if (quality === 'eco') {
+      this.renderer.setPixelRatio(1);
+      this.renderer.shadowMap.enabled = false;
+      this.keyLight.castShadow = false;
+      this.useBloom = false;
+    } else if (quality === 'high') {
+      this.renderer.setPixelRatio(Math.min(dpr, 2));
+      this.renderer.shadowMap.enabled = true;
+      this.keyLight.castShadow = true;
+      this.useBloom = Boolean(this.composer);
+    } else {
+      // 'auto': balanced crispness for PC & mobile
+      this.renderer.setPixelRatio(this.isCompactMobile ? Math.min(dpr, 1.5) : Math.min(dpr, 2));
+      this.renderer.shadowMap.enabled = true;
+      this.keyLight.castShadow = true;
+      this.useBloom = Boolean(this.composer);
+    }
+
+    this.renderer.setSize(width, height);
+    if (this.composer) {
+      this.composer.setSize(width, height);
+    }
+    if (this.bloomPass) {
+      const bloomScale = this.isCompactMobile && quality !== 'high' ? 0.5 : 1;
+      this.bloomPass.resolution.set(
+        Math.max(1, Math.floor(width * bloomScale)),
+        Math.max(1, Math.floor(height * bloomScale)),
+      );
+    }
+  }
+
+  public setGraphicsQuality(quality: GraphicsQuality): void {
+    this.slowFrameCount = 0;
+    this.applyGraphicsQuality(quality);
+  }
+
   private handleContextLost = (e: Event) => {
     e.preventDefault();
+    this.clearInputs();
     this.callbacks.onContextLost(true);
   };
 
@@ -450,23 +531,36 @@ export class GameEngine {
     this.callbacks.onContextLost(false);
   };
 
+  private handleWindowBlur = () => {
+    this.clearInputs();
+  };
+
+  private handleVisibilityChange = () => {
+    if (document.hidden) {
+      this.clearInputs();
+      this.audio.suspend();
+      if (this.mode === 'playing') {
+        this.callbacks.onPauseToggle();
+      }
+    } else {
+      // Discard accumulated delta while backgrounded
+      this.clock.getDelta();
+      this.audio.resume();
+    }
+  };
+
   private handleResize = () => {
     if (this.disposed) return;
+    this.isCompactMobile = detectCompactMobile();
     const width = Math.max(1, this.container.clientWidth || window.innerWidth);
     const height = Math.max(1, this.container.clientHeight || window.innerHeight);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height);
-    if (this.composer) {
-      this.composer.setSize(width, height);
-    }
-    if (this.bloomPass) {
-      this.bloomPass.resolution.set(width, height);
-    }
+    this.applyGraphicsQuality(this.qualityMode);
   };
 
   private handleKeyDown = (e: KeyboardEvent) => {
-    if (e.code === 'Escape') {
+    if (e.code === 'Escape' || e.code === 'KeyP') {
       if (this.mode === 'playing' || this.mode === 'paused') {
         this.callbacks.onPauseToggle();
       }
@@ -550,10 +644,7 @@ export class GameEngine {
       cp.activated = false;
       cp.updateVisuals(false);
     }
-    for (const coin of this.currentTrack.coins) {
-      coin.collected = false;
-      coin.mesh.visible = true;
-    }
+    this.currentTrack.resetCoins();
     this.vehicle.resetToTrack(this.currentTrack);
     this.runElapsedSec = 0;
     this.recordedFrames = [];
@@ -654,11 +745,11 @@ export class GameEngine {
     const themeColors = getAbyssThemeColors(level.groundTheme);
     drawAbyssGridCanvas(this.abyssGridCanvas, level.groundTheme);
     this.abyssGridTex.needsUpdate = true;
-    this.scene.background = new THREE.Color(themeColors.bg);
-    this.scene.fog = new THREE.FogExp2(themeColors.bg, 0.0021);
+    (this.scene.background as THREE.Color).set(themeColors.bg);
+    (this.scene.fog as THREE.FogExp2).color.set(themeColors.bg);
     this.sunMat.color.setHex(themeColors.sunHex);
 
-    const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
+    const maxAniso = Math.min(this.isCompactMobile ? 4 : 8, this.renderer.capabilities.getMaxAnisotropy());
     this.currentTrack = buildTrack(level, maxAniso);
     this.scene.add(this.currentTrack.group);
     this.vehicle.resetToTrack(this.currentTrack);
@@ -687,9 +778,7 @@ export class GameEngine {
     slot.scaleZ = scaleZ;
     _pColor.set(colorHex);
     this.particleMesh.setColorAt(idx, _pColor);
-    if (this.particleMesh.instanceColor) {
-      this.particleMesh.instanceColor.needsUpdate = true;
-    }
+    this.particleColorDirty = true;
   }
 
   private updateParticles(dt: number): void {
@@ -716,6 +805,10 @@ export class GameEngine {
     }
     if (dirty) {
       this.particleMesh.instanceMatrix.needsUpdate = true;
+    }
+    if (this.particleColorDirty && this.particleMesh.instanceColor) {
+      this.particleMesh.instanceColor.needsUpdate = true;
+      this.particleColorDirty = false;
     }
   }
 
@@ -768,8 +861,23 @@ export class GameEngine {
   private tick = () => {
     if (this.disposed) return;
 
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+    const rawDelta = this.clock.getDelta();
+    const dt = Math.min(rawDelta, 0.05);
     const elapsed = this.clock.elapsedTime;
+
+    // Auto-quality frame-rate guard on GPU devices when in 'auto' mode
+    if (!this.isSoftwareGl && this.qualityMode === 'auto' && this.useBloom) {
+      if (rawDelta > 0.032) {
+        this.slowFrameCount += 1;
+        if (this.slowFrameCount > 90) {
+          this.useBloom = false;
+          this.renderer.setPixelRatio(1);
+          this.slowFrameCount = 0;
+        }
+      } else if (this.slowFrameCount > 0) {
+        this.slowFrameCount -= 1;
+      }
+    }
 
     if (this.currentTrack) {
       this.currentTrack.update(elapsed);
@@ -795,8 +903,10 @@ export class GameEngine {
       _carUp.set(0, 1, 0).applyQuaternion(this.vehicle.quaternion);
       _carRight.set(1, 0, 0).applyQuaternion(this.vehicle.quaternion);
 
+      const emitBoostLines = this.qualityMode !== 'eco';
       if (this.vehicle.boosting) {
-        for (let k = 0; k < 2; k++) {
+        const exhaustCount = emitBoostLines ? 2 : 1;
+        for (let k = 0; k < exhaustCount; k++) {
           const px = this.vehicle.position.x - _carFwd.x * 2.6 + (Math.random() - 0.5) * 1.1;
           const py = this.vehicle.position.y + 0.55 + (Math.random() - 0.5) * 0.4;
           const pz = this.vehicle.position.z - _carFwd.z * 2.6 + (Math.random() - 0.5) * 1.1;
@@ -812,28 +922,30 @@ export class GameEngine {
             this.currentLevel.accentColor,
           );
         }
-        // Peripheral wind speed streaks around camera
-        const sx =
-          this.vehicle.position.x +
-          _carFwd.x * 16 +
-          _carRight.x * (Math.random() - 0.5) * 18;
-        const sy = this.vehicle.position.y + 2.5 + (Math.random() - 0.5) * 7;
-        const sz =
-          this.vehicle.position.z +
-          _carFwd.z * 16 +
-          _carRight.z * (Math.random() - 0.5) * 18;
-        this.spawnParticle(
-          sx,
-          sy,
-          sz,
-          -_carFwd.x * 58,
-          -_carFwd.y * 58,
-          -_carFwd.z * 58,
-          0.24,
-          5.2,
-          '#ffffff',
-        );
-      } else if (this.vehicle.drifting) {
+        if (emitBoostLines) {
+          // Peripheral wind speed streaks around camera
+          const sx =
+            this.vehicle.position.x +
+            _carFwd.x * 16 +
+            _carRight.x * (Math.random() - 0.5) * 18;
+          const sy = this.vehicle.position.y + 2.5 + (Math.random() - 0.5) * 7;
+          const sz =
+            this.vehicle.position.z +
+            _carFwd.z * 16 +
+            _carRight.z * (Math.random() - 0.5) * 18;
+          this.spawnParticle(
+            sx,
+            sy,
+            sz,
+            -_carFwd.x * 58,
+            -_carFwd.y * 58,
+            -_carFwd.z * 58,
+            0.24,
+            5.2,
+            '#ffffff',
+          );
+        }
+      } else if (this.vehicle.drifting && emitBoostLines) {
         const px = this.vehicle.position.x - _carFwd.x * 1.6 + (Math.random() - 0.5) * 1.8;
         const py = this.vehicle.position.y + 0.25;
         const pz = this.vehicle.position.z - _carFwd.z * 1.6 + (Math.random() - 0.5) * 1.8;
@@ -875,11 +987,19 @@ export class GameEngine {
         this.camera.updateProjectionMatrix();
       }
 
-      // Keep abyss grid & distant horizon anchored seamlessly to car XZ
+      // Keep abyss grid, directional shadow frustum, & distant horizon anchored to car
       const snapX = Math.floor(this.vehicle.position.x / 20) * 20;
       const snapZ = Math.floor(this.vehicle.position.z / 20) * 20;
       this.abyssGridMesh.position.set(snapX, -72, snapZ);
       this.horizonGroup.position.set(this.vehicle.position.x, 0, this.vehicle.position.z);
+
+      if (this.keyLight.castShadow) {
+        const sx = Math.round(this.vehicle.position.x / 4) * 4;
+        const sy = Math.round(this.vehicle.position.y / 4) * 4;
+        const sz = Math.round(this.vehicle.position.z / 4) * 4;
+        this.keyLight.target.position.set(sx, sy, sz);
+        this.keyLight.position.set(sx + 45, sy + 95, sz + 35);
+      }
 
       this.hudEmitAccum += dt;
       if (this.hudEmitAccum >= 0.05) {
@@ -940,11 +1060,19 @@ export class GameEngine {
       }
       this.abyssGridMesh.position.set(0, -72, 0);
       this.horizonGroup.position.set(0, 0, 0);
+      if (this.keyLight.castShadow) {
+        this.keyLight.target.position.copy(this.vehicle.position);
+        this.keyLight.position.set(
+          this.vehicle.position.x + 45,
+          this.vehicle.position.y + 95,
+          this.vehicle.position.z + 35,
+        );
+      }
     }
 
     this.updateParticles(dt);
 
-    if (this.isSoftwareGl || !this.composer) {
+    if (this.isSoftwareGl || !this.useBloom || !this.composer) {
       this.renderer.render(this.scene, this.camera);
     } else {
       this.composer.render();
@@ -967,6 +1095,8 @@ export class GameEngine {
     window.visualViewport?.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
+    window.removeEventListener('blur', this.handleWindowBlur);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
     this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored);
 

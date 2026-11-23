@@ -70,6 +70,7 @@ export const RacingHud: React.FC<RacingHudProps> = ({
   const hitFlashing = nowMs - hud.hazardHitFlash < 500;
 
   const bindHold = (control: keyof InputState) => ({
+    onContextMenu: (e: React.MouseEvent<HTMLButtonElement>) => e.preventDefault(),
     onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
       e.preventDefault();
       try {
@@ -88,7 +89,7 @@ export const RacingHud: React.FC<RacingHudProps> = ({
   });
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-6">
+    <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-6 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
       {/* Hazard screen border flash */}
       {hitFlashing && (
         <div className="pointer-events-none fixed inset-0 border-4 border-[#ff0055]/60" />
@@ -246,11 +247,13 @@ export const RacingHud: React.FC<RacingHudProps> = ({
           </div>
         ) : (
           <div className="hidden md:flex items-center gap-3 rounded-lg border border-white/10 bg-[#070913]/80 px-3.5 py-2 text-xs text-slate-300">
-            <span>WASD / Arrows: Drive & Steer</span>
+            <span>WASD / Arrows: Drive</span>
             <span aria-hidden="true">·</span>
-            <span>Space: Nitro</span>
+            <span>Space / Shift: Nitro</span>
             <span aria-hidden="true">·</span>
             <span>R: Respawn</span>
+            <span aria-hidden="true">·</span>
+            <span>P: Pause</span>
           </div>
         )}
 

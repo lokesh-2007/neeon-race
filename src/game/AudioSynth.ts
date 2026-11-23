@@ -125,6 +125,18 @@ export class AudioSynth {
     }
   }
 
+  public suspend(): void {
+    if (this.ctx && this.ctx.state === 'running') {
+      void this.ctx.suspend();
+    }
+  }
+
+  public resume(): void {
+    if (this.ctx && this.ctx.state === 'suspended' && !this.muted) {
+      void this.ctx.resume();
+    }
+  }
+
   private midiToFreq(midi: number): number {
     return 440 * Math.pow(2, (midi - 69) / 12);
   }

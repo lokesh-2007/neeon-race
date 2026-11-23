@@ -17,7 +17,10 @@
     background-color: #050508;
     font-family: var(--font-sans);
     overflow: hidden;
+    overscroll-behavior: none;
     touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
   }
 }
 

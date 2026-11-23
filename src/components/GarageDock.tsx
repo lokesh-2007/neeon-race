@@ -6,15 +6,18 @@ import {
   GarageConfig,
   GLIDER_SPECS,
   GliderId,
+  GraphicsQuality,
   NEON_PRESETS,
 } from '../game/types';
 
 interface GarageDockProps {
   garage: GarageConfig;
   steeringSensitivity: number;
+  graphicsQuality: GraphicsQuality;
   totalCoins: number;
   onChangeGarage: (next: GarageConfig) => void;
   onChangeSensitivity: (val: number) => void;
+  onChangeQuality: (q: GraphicsQuality) => void;
   onClose: () => void;
   onRace: () => void;
 }
@@ -37,9 +40,11 @@ const GLIDER_ORDER: GliderId[] = ['none', 'aero-wings', 'plasma-kite', 'jet-pack
 export const GarageDock: React.FC<GarageDockProps> = ({
   garage,
   steeringSensitivity,
+  graphicsQuality,
   totalCoins,
   onChangeGarage,
   onChangeSensitivity,
+  onChangeQuality,
   onClose,
   onRace,
 }) => {
@@ -47,7 +52,7 @@ export const GarageDock: React.FC<GarageDockProps> = ({
   const activeGlider = GLIDER_SPECS[garage.gliderId];
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-4 sm:p-6">
+    <div className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-4 sm:p-6 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       {/* Top Bar */}
       <div className="flex items-start justify-between gap-3">
         <button
@@ -74,7 +79,7 @@ export const GarageDock: React.FC<GarageDockProps> = ({
       </div>
 
       {/* Bottom Dock (keeps center 3D car & glider unobstructed; scrollable on narrow phones) */}
-      <div className="pointer-events-auto mx-auto w-full max-w-5xl max-h-[54vh] overflow-y-auto lg:max-h-none lg:overflow-visible rounded-2xl border border-white/15 bg-[#070913]/92 p-3.5 sm:p-5">
+      <div className="pointer-events-auto mx-auto w-full max-w-5xl max-h-[54dvh] overflow-y-auto overscroll-contain lg:max-h-none lg:overflow-visible rounded-2xl border border-white/15 bg-[#070913]/92 p-3.5 sm:p-5">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-center">
           {/* Chassis Selector */}
           <div className="lg:col-span-5 space-y-2.5">
@@ -210,24 +215,46 @@ export const GarageDock: React.FC<GarageDockProps> = ({
               </div>
             </div>
 
-            {/* Steering Sensitivity Slider */}
-            <div className="pt-0.5">
-              <div className="mb-1 flex items-center justify-between text-xs">
-                <span className="font-medium text-slate-300">Steering Sensitivity</span>
-                <span className="font-mono-tabular font-semibold text-cyan-300">
-                  {Math.round(steeringSensitivity * 100)}%
-                </span>
+            {/* Steering Sensitivity & Graphics Quality */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-0.5">
+              <div>
+                <div className="mb-1 flex items-center justify-between text-xs">
+                  <span className="font-medium text-slate-300">Steering</span>
+                  <span className="font-mono-tabular font-semibold text-cyan-300">
+                    {Math.round(steeringSensitivity * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0.4}
+                  max={1.8}
+                  step={0.05}
+                  value={steeringSensitivity}
+                  onChange={(e) => onChangeSensitivity(parseFloat(e.target.value))}
+                  aria-label="Steering Sensitivity"
+                  className="h-2 w-full cursor-pointer accent-cyan-400"
+                />
               </div>
-              <input
-                type="range"
-                min={0.4}
-                max={1.8}
-                step={0.05}
-                value={steeringSensitivity}
-                onChange={(e) => onChangeSensitivity(parseFloat(e.target.value))}
-                aria-label="Steering Sensitivity"
-                className="h-2 w-full cursor-pointer accent-cyan-400"
-              />
+
+              <div>
+                <div className="mb-1 text-xs font-medium text-slate-300">Graphics</div>
+                <div className="grid grid-cols-3 gap-1">
+                  {(['auto', 'high', 'eco'] as const).map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => onChangeQuality(q)}
+                      className={`rounded-md border py-1 text-[11px] font-semibold uppercase transition-colors cursor-pointer ${
+                        graphicsQuality === q
+                          ? 'border-cyan-400 bg-cyan-500/20 text-white'
+                          : 'border-white/12 bg-white/5 text-slate-400 hover:border-white/25 hover:text-white'
+                      }`}
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 

@@ -10,6 +10,7 @@ import {
 } from './types';
 
 const _coinBob = new THREE.Vector3();
+const _coinDummy = new THREE.Object3D();
 
 interface FrameSample {
   pos: THREE.Vector3;
@@ -26,6 +27,8 @@ export interface BuiltTrack {
   boostZones: BoostZone[];
   checkpoints: CheckpointGate[];
   coins: CoinItem[];
+  markCoinCollected: (index: number) => void;
+  resetCoins: () => void;
   finishGate: {
     position: THREE.Vector3;
     forward: THREE.Vector3;
@@ -45,6 +48,7 @@ export interface BuiltTrack {
 export class SpatialQuadHash {
   private readonly cellSize = 18;
   private readonly buckets = new Map<string, ColliderQuad[]>();
+  private readonly seenSet = new Set<ColliderQuad>();
 
   public insert(quad: ColliderQuad): void {
     const minX = Math.min(quad.a.x, quad.b.x, quad.c.x, quad.d.x) - 1;
@@ -74,7 +78,8 @@ export class SpatialQuadHash {
     out.length = 0;
     const cx = Math.floor(x / this.cellSize);
     const cz = Math.floor(z / this.cellSize);
-    const seen = new Set<ColliderQuad>();
+    const seen = this.seenSet;
+    seen.clear();
 
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
@@ -379,7 +384,7 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
-  const coinGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.24, 16);
+  const coinGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.24, 14);
   coinGeo.rotateX(Math.PI / 2);
   const coinMat = new THREE.MeshStandardMaterial({
     color: 0xffd166,
@@ -388,6 +393,43 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     metalness: 0.85,
     roughness: 0.2,
   });
+
+  // Shared materials for checkpoints & obstacles (cuts shader/material bloat)
+  const cpFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x111827,
+    metalness: 0.85,
+    roughness: 0.25,
+  });
+  const obsHullMat = new THREE.MeshStandardMaterial({
+    color: 0x161b2e,
+    metalness: 0.85,
+    roughness: 0.24,
+  });
+  const obsLaserMat = new THREE.MeshStandardMaterial({
+    color: 0xff1e56,
+    emissive: 0xff0055,
+    emissiveIntensity: 3.4,
+    roughness: 0.15,
+  });
+  const obsHammerGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xffaa00,
+    emissive: 0xff6600,
+    emissiveIntensity: 2.8,
+    roughness: 0.2,
+  });
+  const obsBarrierGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xff2a55,
+    emissive: 0xff0055,
+    emissiveIntensity: 2.8,
+    roughness: 0.2,
+  });
+  const obsSpinnerGlowMat = new THREE.MeshStandardMaterial({
+    color: 0x00f3ff,
+    emissive: 0x00f3ff,
+    emissiveIntensity: 3.1,
+    roughness: 0.15,
+  });
+
   disposables.push(
     deckMaterial,
     sideHullMaterial,
@@ -396,6 +438,12 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     boostMat,
     coinGeo,
     coinMat,
+    cpFrameMat,
+    obsHullMat,
+    obsLaserMat,
+    obsHammerGlowMat,
+    obsBarrierGlowMat,
+    obsSpinnerGlowMat,
   );
 
   // Cursor state: starts at origin facing -Z
@@ -413,6 +461,7 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
   // Track sections (contiguous strips separated by jump gaps)
   const sections: FrameSample[][] = [];
   let activeSection: FrameSample[] = [];
+  const boostPadTransforms: THREE.Matrix4[] = [];
 
   const pushSample = (
     p: THREE.Vector3,
@@ -440,19 +489,14 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
   const addBoostPadAt = (sample: FrameSample) => {
     const padWidth = Math.min(sample.width * 0.52, 6.2);
     const padLen = 10;
-    const padGeo = new THREE.PlaneGeometry(padWidth, padLen);
-    padGeo.rotateX(-Math.PI / 2);
-    disposables.push(padGeo);
-
-    const mesh = new THREE.Mesh(padGeo, boostMat);
     const basis = new THREE.Matrix4().makeBasis(
       sample.right,
       sample.up,
       sample.forward.clone().negate(),
     );
-    mesh.quaternion.setFromRotationMatrix(basis);
-    mesh.position.copy(sample.pos).addScaledVector(sample.up, 0.05);
-    group.add(mesh);
+    basis.scale(new THREE.Vector3(padWidth, 1, padLen));
+    basis.setPosition(sample.pos.clone().addScaledVector(sample.up, 0.05));
+    boostPadTransforms.push(basis);
 
     boostZones.push({
       center: sample.pos.clone().addScaledVector(sample.up, 0.5),
@@ -464,13 +508,11 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
 
   let coinPhaseCounter = 0;
   const addCoinAt = (pos: THREE.Vector3, up: THREE.Vector3) => {
-    const mesh = new THREE.Mesh(coinGeo, coinMat);
-    mesh.position.copy(pos);
-    group.add(mesh);
+    const index = coins.length;
     coins.push({
+      index,
       basePosition: pos.clone(),
       up: up.clone().normalize(),
-      mesh,
       collected: false,
       phase: coinPhaseCounter++ * 0.65,
     });
@@ -534,24 +576,19 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     const holoGeo = new THREE.PlaneGeometry(halfW * 2 - 0.8, 0.45);
     disposables.push(pillarGeo, headerGeo, holoGeo);
 
-    const frameMat = new THREE.MeshStandardMaterial({
-      color: 0x111827,
-      metalness: 0.85,
-      roughness: 0.25,
-    });
     const glowMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(level.secondaryColor),
       emissive: new THREE.Color(level.secondaryColor),
       emissiveIntensity: 2.5,
       roughness: 0.2,
     });
-    disposables.push(frameMat, glowMat);
+    disposables.push(glowMat);
 
-    const leftPillar = new THREE.Mesh(pillarGeo, frameMat);
+    const leftPillar = new THREE.Mesh(pillarGeo, cpFrameMat);
     leftPillar.position.set(-halfW, 4.25, 0);
-    const rightPillar = new THREE.Mesh(pillarGeo, frameMat);
+    const rightPillar = new THREE.Mesh(pillarGeo, cpFrameMat);
     rightPillar.position.set(halfW, 4.25, 0);
-    const header = new THREE.Mesh(headerGeo, frameMat);
+    const header = new THREE.Mesh(headerGeo, cpFrameMat);
     header.position.set(0, 8.5, 0);
 
     const stripLeft = new THREE.Mesh(new THREE.BoxGeometry(0.32, 8.2, 1.25), glowMat);
@@ -591,18 +628,7 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     const phase = cfg.phase ?? 0;
 
     const emitterGeo = new THREE.CylinderGeometry(0.45, 0.55, 4.2, 8);
-    const emitterMat = new THREE.MeshStandardMaterial({
-      color: 0x161b2e,
-      metalness: 0.8,
-      roughness: 0.25,
-    });
-    const beamMat = new THREE.MeshStandardMaterial({
-      color: 0xff1e56,
-      emissive: 0xff0055,
-      emissiveIntensity: 3.4,
-      roughness: 0.15,
-    });
-    disposables.push(emitterGeo, emitterMat, beamMat);
+    disposables.push(emitterGeo);
 
     const basis = new THREE.Matrix4().makeBasis(
       sample.right,
@@ -614,19 +640,19 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     container.quaternion.setFromRotationMatrix(basis);
     container.position.copy(sample.pos);
 
-    const leftPost = new THREE.Mesh(emitterGeo, emitterMat);
+    const leftPost = new THREE.Mesh(emitterGeo, obsHullMat);
     leftPost.position.set(-halfW - 0.3, 2.1, 0);
-    const rightPost = new THREE.Mesh(emitterGeo, emitterMat);
+    const rightPost = new THREE.Mesh(emitterGeo, obsHullMat);
     rightPost.position.set(halfW + 0.3, 2.1, 0);
     container.add(leftPost, rightPost);
 
     if (cfg.mode === 'pulse') {
       // Horizontal laser bar moving vertically up and down
-      const beamGeo = new THREE.CylinderGeometry(0.18, 0.18, sample.width + 0.4, 10);
+      const beamGeo = new THREE.CylinderGeometry(0.18, 0.18, sample.width + 0.4, 8);
       beamGeo.rotateZ(Math.PI / 2);
       disposables.push(beamGeo);
 
-      const beam = new THREE.Mesh(beamGeo, beamMat);
+      const beam = new THREE.Mesh(beamGeo, obsLaserMat);
       beam.position.set(0, 1.4, 0);
       container.add(beam);
 
@@ -654,9 +680,9 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       });
     } else {
       // Sweeping vertical laser pylon sliding left <-> right
-      const beamGeo = new THREE.CylinderGeometry(0.24, 0.24, 4.2, 10);
+      const beamGeo = new THREE.CylinderGeometry(0.24, 0.24, 4.2, 8);
       disposables.push(beamGeo);
-      const beam = new THREE.Mesh(beamGeo, beamMat);
+      const beam = new THREE.Mesh(beamGeo, obsLaserMat);
       beam.position.set(0, 2.1, 0);
       container.add(beam);
 
@@ -706,41 +732,30 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     container.quaternion.setFromRotationMatrix(basis);
     container.position.copy(sample.pos);
 
-    const gantryMat = new THREE.MeshStandardMaterial({
-      color: 0x161c2e,
-      metalness: 0.85,
-      roughness: 0.25,
-    });
-    const hammerGlowMat = new THREE.MeshStandardMaterial({
-      color: 0xffaa00,
-      emissive: 0xff6600,
-      emissiveIntensity: 2.8,
-      roughness: 0.2,
-    });
     const postGeo = new THREE.BoxGeometry(0.7, 10.5, 0.7);
     const topBarGeo = new THREE.BoxGeometry(sample.width + 2.2, 0.7, 0.9);
     const armGeo = new THREE.CylinderGeometry(0.18, 0.18, 7.6, 8);
     const headGeo = new THREE.CylinderGeometry(1.35, 1.35, 2.8, 8);
     headGeo.rotateX(Math.PI / 2);
     const ringGeo = new THREE.TorusGeometry(1.4, 0.14, 8, 16);
-    disposables.push(gantryMat, hammerGlowMat, postGeo, topBarGeo, armGeo, headGeo, ringGeo);
+    disposables.push(postGeo, topBarGeo, armGeo, headGeo, ringGeo);
 
-    const leftPost = new THREE.Mesh(postGeo, gantryMat);
+    const leftPost = new THREE.Mesh(postGeo, obsHullMat);
     leftPost.position.set(-halfW - 0.7, 5.25, 0);
-    const rightPost = new THREE.Mesh(postGeo, gantryMat);
+    const rightPost = new THREE.Mesh(postGeo, obsHullMat);
     rightPost.position.set(halfW + 0.7, 5.25, 0);
-    const topBar = new THREE.Mesh(topBarGeo, gantryMat);
+    const topBar = new THREE.Mesh(topBarGeo, obsHullMat);
     topBar.position.set(0, 10.4, 0);
     container.add(leftPost, rightPost, topBar);
 
     const pivot = new THREE.Group();
     pivot.position.set(0, 10.2, 0);
 
-    const arm = new THREE.Mesh(armGeo, gantryMat);
+    const arm = new THREE.Mesh(armGeo, obsHullMat);
     arm.position.set(0, -3.8, 0);
-    const head = new THREE.Mesh(headGeo, gantryMat);
+    const head = new THREE.Mesh(headGeo, obsHullMat);
     head.position.set(0, -7.8, 0);
-    const ring = new THREE.Mesh(ringGeo, hammerGlowMat);
+    const ring = new THREE.Mesh(ringGeo, obsHammerGlowMat);
     ring.position.set(0, -7.8, 0);
 
     pivot.add(arm, head, ring);
@@ -790,30 +805,19 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     const blockW = Math.max(4.5, sample.width * 0.26);
     const blockGeo = new THREE.BoxGeometry(blockW, 2.6, 1.4);
     const trimGeo = new THREE.BoxGeometry(blockW + 0.14, 0.24, 1.48);
-    const hullMat = new THREE.MeshStandardMaterial({
-      color: 0x15192d,
-      metalness: 0.85,
-      roughness: 0.22,
-    });
-    const glowMat = new THREE.MeshStandardMaterial({
-      color: 0xff2a55,
-      emissive: 0xff0055,
-      emissiveIntensity: 2.8,
-      roughness: 0.2,
-    });
-    disposables.push(blockGeo, trimGeo, hullMat, glowMat);
+    disposables.push(blockGeo, trimGeo);
 
     const leftGate = new THREE.Group();
     leftGate.position.set(-halfW + blockW * 0.5, 1.3, 0);
-    leftGate.add(new THREE.Mesh(blockGeo, hullMat));
-    const leftTrim = new THREE.Mesh(trimGeo, glowMat);
+    leftGate.add(new THREE.Mesh(blockGeo, obsHullMat));
+    const leftTrim = new THREE.Mesh(trimGeo, obsBarrierGlowMat);
     leftTrim.position.y = 1.25;
     leftGate.add(leftTrim);
 
     const rightGate = new THREE.Group();
     rightGate.position.set(halfW - blockW * 0.5, 1.3, 0);
-    rightGate.add(new THREE.Mesh(blockGeo, hullMat));
-    const rightTrim = new THREE.Mesh(trimGeo, glowMat);
+    rightGate.add(new THREE.Mesh(blockGeo, obsHullMat));
+    const rightTrim = new THREE.Mesh(trimGeo, obsBarrierGlowMat);
     rightTrim.position.y = 1.25;
     rightGate.add(rightTrim);
 
@@ -874,27 +878,16 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     container.quaternion.setFromRotationMatrix(basis);
     container.position.copy(sample.pos);
 
-    const hubMat = new THREE.MeshStandardMaterial({
-      color: 0x161b2e,
-      metalness: 0.85,
-      roughness: 0.25,
-    });
-    const bladeMat = new THREE.MeshStandardMaterial({
-      color: 0x00f3ff,
-      emissive: 0x00f3ff,
-      emissiveIntensity: 3.1,
-      roughness: 0.15,
-    });
-    const hubGeo = new THREE.CylinderGeometry(1.1, 1.35, 2.4, 12);
-    const bladeGeo = new THREE.CylinderGeometry(0.24, 0.24, armHalf * 2, 10);
+    const hubGeo = new THREE.CylinderGeometry(1.1, 1.35, 2.4, 10);
+    const bladeGeo = new THREE.CylinderGeometry(0.24, 0.24, armHalf * 2, 8);
     bladeGeo.rotateZ(Math.PI / 2);
-    disposables.push(hubMat, bladeMat, hubGeo, bladeGeo);
+    disposables.push(hubGeo, bladeGeo);
 
-    const hub = new THREE.Mesh(hubGeo, hubMat);
+    const hub = new THREE.Mesh(hubGeo, obsHullMat);
     hub.position.y = 1.2;
     const rotor = new THREE.Group();
     rotor.position.y = 1.35;
-    const blade = new THREE.Mesh(bladeGeo, bladeMat);
+    const blade = new THREE.Mesh(bladeGeo, obsSpinnerGlowMat);
     rotor.add(blade);
 
     container.add(hub, rotor);
@@ -1461,13 +1454,25 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     const rPts = railRightPts[s];
     if (lPts.length >= 2) {
       const lCurve = new THREE.CatmullRomCurve3(lPts);
-      const lGeo = new THREE.TubeGeometry(lCurve, Math.min(720, Math.max(24, lPts.length)), 0.22, 6, false);
+      const lGeo = new THREE.TubeGeometry(
+        lCurve,
+        Math.min(480, Math.max(24, Math.floor(lPts.length * 0.75))),
+        0.22,
+        5,
+        false,
+      );
       disposables.push(lGeo);
       group.add(new THREE.Mesh(lGeo, railPrimaryMat));
     }
     if (rPts.length >= 2) {
       const rCurve = new THREE.CatmullRomCurve3(rPts);
-      const rGeo = new THREE.TubeGeometry(rCurve, Math.min(720, Math.max(24, rPts.length)), 0.22, 6, false);
+      const rGeo = new THREE.TubeGeometry(
+        rCurve,
+        Math.min(480, Math.max(24, Math.floor(rPts.length * 0.75))),
+        0.22,
+        5,
+        false,
+      );
       disposables.push(rGeo);
       group.add(new THREE.Mesh(rGeo, railSecondaryMat));
     }
@@ -1486,12 +1491,74 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     group.add(ribMesh);
   }
 
+  // Instanced Boost Pads (1 draw call instead of N)
+  if (boostPadTransforms.length > 0) {
+    const padGeo = new THREE.PlaneGeometry(1, 1);
+    padGeo.rotateX(-Math.PI / 2);
+    const boostInstanced = new THREE.InstancedMesh(padGeo, boostMat, boostPadTransforms.length);
+    for (let i = 0; i < boostPadTransforms.length; i++) {
+      boostInstanced.setMatrixAt(i, boostPadTransforms[i]);
+    }
+    boostInstanced.instanceMatrix.needsUpdate = true;
+    boostInstanced.computeBoundingSphere();
+    disposables.push(padGeo);
+    group.add(boostInstanced);
+  }
+
+  // Instanced Collectible Coins (1 draw call instead of 60-120)
+  let coinInstanced: THREE.InstancedMesh | null = null;
+  if (coins.length > 0) {
+    coinInstanced = new THREE.InstancedMesh(coinGeo, coinMat, coins.length);
+    coinInstanced.frustumCulled = false;
+    for (let i = 0; i < coins.length; i++) {
+      _coinDummy.position.copy(coins[i].basePosition);
+      _coinDummy.rotation.set(0, coins[i].phase, 0);
+      _coinDummy.scale.set(1, 1, 1);
+      _coinDummy.updateMatrix();
+      coinInstanced.setMatrixAt(i, _coinDummy.matrix);
+    }
+    coinInstanced.instanceMatrix.needsUpdate = true;
+    group.add(coinInstanced);
+  }
+
+  const markCoinCollected = (index: number) => {
+    const c = coins[index];
+    if (!c || c.collected) return;
+    c.collected = true;
+    if (coinInstanced) {
+      _coinDummy.position.copy(c.basePosition);
+      _coinDummy.scale.set(0, 0, 0);
+      _coinDummy.updateMatrix();
+      coinInstanced.setMatrixAt(index, _coinDummy.matrix);
+      coinInstanced.instanceMatrix.needsUpdate = true;
+    }
+  };
+
+  const resetCoins = () => {
+    for (let i = 0; i < coins.length; i++) {
+      const c = coins[i];
+      c.collected = false;
+      if (coinInstanced) {
+        _coinDummy.position.copy(c.basePosition);
+        _coinDummy.rotation.set(0, c.phase, 0);
+        _coinDummy.scale.set(1, 1, 1);
+        _coinDummy.updateMatrix();
+        coinInstanced.setMatrixAt(i, _coinDummy.matrix);
+      }
+    }
+    if (coinInstanced) {
+      coinInstanced.instanceMatrix.needsUpdate = true;
+    }
+  };
+
   return {
     group,
     colliderHash,
     boostZones,
     checkpoints,
     coins,
+    markCoinCollected,
+    resetCoins,
     finishGate: {
       position: finishSample.pos.clone(),
       forward: finishSample.forward.clone(),
@@ -1505,12 +1572,22 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       for (let i = 0; i < obstacles.length; i++) {
         obstacles[i].update(elapsed);
       }
-      for (let i = 0; i < coins.length; i++) {
-        const c = coins[i];
-        if (c.collected) continue;
-        c.mesh.rotation.y = elapsed * 2.8 + c.phase;
-        _coinBob.copy(c.up).multiplyScalar(Math.sin(elapsed * 3.4 + c.phase) * 0.25);
-        c.mesh.position.copy(c.basePosition).add(_coinBob);
+      if (coinInstanced && coins.length > 0) {
+        let anyActive = false;
+        for (let i = 0; i < coins.length; i++) {
+          const c = coins[i];
+          if (c.collected) continue;
+          anyActive = true;
+          _coinBob.copy(c.up).multiplyScalar(Math.sin(elapsed * 3.4 + c.phase) * 0.25);
+          _coinDummy.position.copy(c.basePosition).add(_coinBob);
+          _coinDummy.rotation.set(0, elapsed * 2.8 + c.phase, 0);
+          _coinDummy.scale.set(1, 1, 1);
+          _coinDummy.updateMatrix();
+          coinInstanced.setMatrixAt(i, _coinDummy.matrix);
+        }
+        if (anyActive) {
+          coinInstanced.instanceMatrix.needsUpdate = true;
+        }
       }
     },
     dispose: () => {

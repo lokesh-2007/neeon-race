@@ -22,7 +22,7 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
   onBack,
 }) => {
   return (
-    <div className="fixed inset-0 z-30 overflow-y-auto bg-[#050508]/86 p-4 sm:p-8">
+    <div className="fixed inset-0 z-30 overflow-y-auto overscroll-contain bg-[#050508]/86 p-4 sm:p-8 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto w-full max-w-6xl space-y-6 py-4">
         {/* Header */}
         <div className="flex items-center justify-between gap-4">

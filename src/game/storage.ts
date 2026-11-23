@@ -8,6 +8,7 @@ import {
   DailyMissionDefinition,
   GarageConfig,
   GhostRun,
+  GraphicsQuality,
   LevelBestRecord,
   SavedProgress,
 } from './types';
@@ -27,6 +28,7 @@ function buildDefaultSave(): SavedProgress {
     muted: false,
     ghostEnabled: true,
     steeringSensitivity: 1.0,
+    graphicsQuality: 'auto',
     totalCoins: 0,
     dailyMissions: createFreshDailyMissions(),
   };
@@ -74,6 +76,12 @@ export function loadProgress(): SavedProgress {
       ghostEnabled: parsed.ghostEnabled !== undefined ? Boolean(parsed.ghostEnabled) : true,
       steeringSensitivity:
         Number.isFinite(sens) && sens >= 0.4 && sens <= 1.8 ? sens : defaults.steeringSensitivity,
+      graphicsQuality:
+        parsed.graphicsQuality === 'high' ||
+        parsed.graphicsQuality === 'eco' ||
+        parsed.graphicsQuality === 'auto'
+          ? parsed.graphicsQuality
+          : defaults.graphicsQuality,
       totalCoins: Number.isFinite(coins) && coins >= 0 ? Math.floor(coins) : 0,
       dailyMissions,
     };
@@ -123,6 +131,13 @@ export function saveGhostEnabled(ghostEnabled: boolean): SavedProgress {
 export function saveSteeringSensitivity(steeringSensitivity: number): SavedProgress {
   const current = loadProgress();
   current.steeringSensitivity = Math.max(0.4, Math.min(1.8, steeringSensitivity));
+  saveProgress(current);
+  return current;
+}
+
+export function saveGraphicsQuality(graphicsQuality: GraphicsQuality): SavedProgress {
+  const current = loadProgress();
+  current.graphicsQuality = graphicsQuality;
   saveProgress(current);
   return current;
 }

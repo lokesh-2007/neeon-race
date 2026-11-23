@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 export type ScreenMode = 'title' | 'levels' | 'garage' | 'playing' | 'paused' | 'victory';
+export type GraphicsQuality = 'auto' | 'high' | 'eco';
 
 export type ChassisId =
   | 'interceptor'
@@ -106,6 +107,7 @@ export interface SavedProgress {
   muted: boolean;
   ghostEnabled: boolean;
   steeringSensitivity: number; // 0.4 to 1.8 (1.0 default)
+  graphicsQuality: GraphicsQuality;
   totalCoins: number;
   dailyMissions: DailyMissionsSave;
 }
@@ -195,9 +197,9 @@ export interface BoostZone {
 }
 
 export interface CoinItem {
+  index: number;
   basePosition: THREE.Vector3;
   up: THREE.Vector3;
-  mesh: THREE.Mesh;
   collected: boolean;
   phase: number;
 }

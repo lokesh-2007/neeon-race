@@ -1174,7 +1174,8 @@ export class VehicleController {
         _v2.set(0, 1, 0);
         _v3.crossVectors(_v1, _v2).normalize();
         _v2.crossVectors(_v3, _v1).normalize();
-        _mat4.makeBasis(_v3, _v2, _v1.clone().negate());
+        _v4.copy(_v1).negate();
+        _mat4.makeBasis(_v3, _v2, _v4);
         _targetQuat.setFromRotationMatrix(_mat4);
         this.quaternion.slerp(_targetQuat, 1 - Math.exp(-4.5 * safeDt)).normalize();
       }
@@ -1248,8 +1249,7 @@ export class VehicleController {
       const coin = track.coins[i];
       if (coin.collected) continue;
       if (this.position.distanceToSquared(coin.basePosition) < 3.4 * 3.4) {
-        coin.collected = true;
-        coin.mesh.visible = false;
+        track.markCoinCollected(i);
         this.coinsCollected += 1;
         this.nitro = Math.min(100, this.nitro + 6);
         audio.playCoin();
