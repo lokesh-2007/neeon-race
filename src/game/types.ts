@@ -131,6 +131,8 @@ export type TrackPiece =
       length: number;
       width?: number;
       elevation?: number;
+      twistDeg?: number;
+      twistMode?: 'wall' | 'corkscrew';
       roadStyle?: RoadDesign;
       scenery?: SceneryStyle;
       boostPads?: number[];
@@ -296,10 +298,25 @@ export interface InputState {
   left: boolean;
   right: boolean;
   boost: boolean;
+  jump: boolean;
   pitchUp: boolean;
   pitchDown: boolean;
   rollLeft: boolean;
   rollRight: boolean;
+}
+
+export type EnvironmentalEventType =
+  | 'neon-storm'
+  | 'gravity-flux'
+  | 'solar-overdrive';
+
+export interface EnvironmentalEventHud {
+  type: EnvironmentalEventType;
+  label: string;
+  description: string;
+  remainingSec: number;
+  durationSec: number;
+  accentColor: string;
 }
 
 export interface InfiniteHudStats {
@@ -312,6 +329,7 @@ export interface InfiniteHudStats {
   maxShields: number;
   lastRingFlash: number;
   lastSectorFlash: number;
+  activeEvent: EnvironmentalEventHud | null;
 }
 
 export interface HudTelemetry {

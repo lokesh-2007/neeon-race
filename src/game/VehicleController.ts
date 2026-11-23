@@ -844,6 +844,9 @@ export class VehicleController {
   private steeringSensitivity = 1.0;
   private boostPadTimer = 0;
   private jumpPadCooldown = 0;
+  private jumpCooldown = 0;
+  private coyoteTimer = 0;
+  private jumpLock = false;
   private hazardCooldown = 0;
   private respawnPos = new THREE.Vector3(0, 0.85, -10);
   private respawnQuat = new THREE.Quaternion();
@@ -913,6 +916,9 @@ export class VehicleController {
     this.nitro = 100;
     this.boostPadTimer = 0;
     this.jumpPadCooldown = 0;
+    this.jumpCooldown = 0;
+    this.coyoteTimer = 0;
+    this.jumpLock = false;
     this.hazardCooldown = 0;
     this.lastCheckpointFlash = 0;
     this.lastRingFlash = 0;
@@ -934,6 +940,9 @@ export class VehicleController {
     this.drifting = false;
     this.boosting = false;
     this.boostPadTimer = 0;
+    this.jumpCooldown = 0;
+    this.coyoteTimer = 0;
+    this.jumpLock = false;
     this.steerSmooth = 0;
     this.steerVisual = 0;
     this.gliderOpen = 0;
@@ -997,6 +1006,11 @@ export class VehicleController {
     input: InputState,
     track: TrackQueryTarget,
     audio: AudioSynth,
+    envMod?: {
+      gravityScale?: number;
+      speedBonus?: number;
+      nitroRegenMult?: number;
+    },
   ): {
     finished: boolean;
     boostTriggered: boolean;
@@ -1004,6 +1018,9 @@ export class VehicleController {
     fatalCrash: CrashEvent | null;
   } {
     const safeDt = Math.min(dt, 0.04);
+    const gravityScale = envMod?.gravityScale ?? 1;
+    const speedBonus = envMod?.speedBonus ?? 0;
+    const nitroRegenMult = envMod?.nitroRegenMult ?? 1;
     let boostTriggered = false;
     let fatalCrash: CrashEvent | null = null;
 
@@ -1012,6 +1029,9 @@ export class VehicleController {
     }
     if (this.jumpPadCooldown > 0) {
       this.jumpPadCooldown = Math.max(0, this.jumpPadCooldown - safeDt);
+    }
+    if (this.jumpCooldown > 0) {
+      this.jumpCooldown = Math.max(0, this.jumpCooldown - safeDt);
     }
     if (this.hazardCooldown > 0) {
       this.hazardCooldown = Math.max(0, this.hazardCooldown - safeDt);
@@ -1029,7 +1049,7 @@ export class VehicleController {
     if (wantsNitro) {
       this.nitro = Math.max(0, this.nitro - 26 * safeDt);
     } else {
-      this.nitro = Math.min(100, this.nitro + (this.drifting ? 16 : 9) * safeDt);
+      this.nitro = Math.min(100, this.nitro + (this.drifting ? 16 : 9) * nitroRegenMult * safeDt);
     }
 
     const support = this.findSupportingQuad(track);
@@ -1042,8 +1062,10 @@ export class VehicleController {
       // Detach only if nearly stopped upside down in a loop
       if (quad.normal.y < -0.35 && this.velocity.length() < 9) {
         this.grounded = false;
+        this.coyoteTimer = Math.max(0, this.coyoteTimer - safeDt);
       } else {
         this.grounded = true;
+        this.coyoteTimer = 0.14;
         this.airborne = false;
         this.gliding = false;
 
@@ -1095,7 +1117,8 @@ export class VehicleController {
         }
 
         // Acceleration, Braking, Nitro
-        const maxSpd = this.spec.topSpeed + (this.boosting ? this.spec.nitroPower : 0);
+        const maxSpd =
+          this.spec.topSpeed + speedBonus + (this.boosting ? this.spec.nitroPower : 0);
         const accel = this.spec.acceleration + (this.boosting ? 20 : 0);
 
         if (input.throttle || isPadBoost) {
@@ -1134,6 +1157,7 @@ export class VehicleController {
     } else {
       // Airborne & Glider physics
       this.grounded = false;
+      this.coyoteTimer = Math.max(0, this.coyoteTimer - safeDt);
       this.airborne = true;
       this.airborneSec += safeDt;
       this.drifting = false;
@@ -1144,7 +1168,7 @@ export class VehicleController {
 
       // Glider slows downward sink once past initial ramp apex
       const effectiveGravity =
-        this.gliding && this.velocity.y > 4 ? 26 : gliderSpec.airGravity;
+        (this.gliding && this.velocity.y > 4 ? 26 : gliderSpec.airGravity) * gravityScale;
       this.velocity.y -= effectiveGravity * safeDt;
 
       // Glider gentle terminal sink speed cap when deployed
@@ -1154,7 +1178,7 @@ export class VehicleController {
 
       // Glider forward thrust + optional nitro air boost
       const fwdAirSpd = this.velocity.dot(_fwd);
-      if (this.gliding && gliderSpec.airThrust > 0 && fwdAirSpd < this.spec.topSpeed + 12) {
+      if (this.gliding && gliderSpec.airThrust > 0 && fwdAirSpd < this.spec.topSpeed + speedBonus + 12) {
         this.velocity.addScaledVector(_fwd, gliderSpec.airThrust * safeDt);
       }
       if (this.boosting) {
@@ -1200,6 +1224,29 @@ export class VehicleController {
         _targetQuat.setFromRotationMatrix(_mat4);
         this.quaternion.slerp(_targetQuat, 1 - Math.exp(-4.5 * safeDt)).normalize();
       }
+    }
+
+    // Manual Jump (works while grounded or during brief coyote-time window off edges)
+    if (
+      input.jump &&
+      !this.jumpLock &&
+      (this.grounded || this.coyoteTimer > 0) &&
+      this.jumpCooldown <= 0
+    ) {
+      this.jumpLock = true;
+      this.jumpCooldown = 0.52;
+      this.coyoteTimer = 0;
+      this.grounded = false;
+      this.airborne = true;
+      this.position.addScaledVector(_up, 0.48);
+      const vUp = this.velocity.dot(_up);
+      const jumpTarget = gravityScale < 0.8 ? 18.2 : 16.5;
+      if (vUp < jumpTarget) {
+        this.velocity.addScaledVector(_up, jumpTarget - Math.max(0, vUp));
+      }
+      audio.playJump();
+    } else if (!input.jump) {
+      this.jumpLock = false;
     }
 
     // Integrate position

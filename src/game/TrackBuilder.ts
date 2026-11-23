@@ -60,6 +60,11 @@ export interface BuiltTrack extends TrackQueryTarget {
   };
   endPose: TrackStartPose;
   gripMultiplier: number;
+  setNeonColors: (
+    primaryHex: THREE.ColorRepresentation,
+    secondaryHex: THREE.ColorRepresentation,
+    emissiveBoost?: number,
+  ) => void;
   update: (elapsed: number) => void;
   dispose: () => void;
 }
@@ -1297,16 +1302,23 @@ export function buildTrack(
     const w = piece.width ?? level.defaultWidth;
 
     if (piece.type === 'straight') {
-      const steps = Math.max(4, Math.ceil(piece.length / 4));
+      const twistDeg = piece.twistDeg ?? 0;
+      const twistMaxRad = THREE.MathUtils.degToRad(twistDeg);
+      const isCorkscrew = piece.twistMode === 'corkscrew';
+      const hasTwist = Math.abs(twistDeg) > 12;
+      const steps = hasTwist
+        ? Math.max(Math.abs(twistDeg) >= 180 ? 56 : 28, Math.ceil(piece.length / 3))
+        : Math.max(4, Math.ceil(piece.length / 4));
       const pieceSamples: FrameSample[] = [];
       const elev = piece.elevation ?? 0;
       const roadStyle = piece.roadStyle ?? 'highway';
       const isWave = roadStyle === 'wave-deck';
-      const isSplit = roadStyle === 'split-bridge';
+      const isSplit = roadStyle === 'split-bridge' && !hasTwist;
       const wallH = roadStyle === 'canyon-trench' ? 1.65 : 0;
       const effW = roadStyle === 'narrow-beam' && !piece.width ? Math.min(16, w) : w;
 
       const startPos = curPos.clone();
+      const twistQuat = new THREE.Quaternion();
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
         const baseY = elev * (3 * t * t - 2 * t * t * t);
@@ -1331,13 +1343,24 @@ export function buildTrack(
           .multiplyScalar(piece.length)
           .addScaledVector(curUp, dBaseDt + dWaveDt)
           .normalize();
-        const up = curRight.clone().cross(tangent).normalize();
-        const right = tangent.clone().cross(up).normalize();
+        const baseUp = curRight.clone().cross(tangent).normalize();
+        const baseRight = tangent.clone().cross(baseUp).normalize();
+
+        let up = baseUp;
+        let right = baseRight;
+        if (hasTwist) {
+          const twistAngle = isCorkscrew
+            ? twistMaxRad * (3 * t * t - 2 * t * t * t)
+            : twistMaxRad * Math.sin(Math.PI * t);
+          twistQuat.setFromAxisAngle(tangent, twistAngle);
+          up = baseUp.clone().applyQuaternion(twistQuat).normalize();
+          right = baseRight.clone().applyQuaternion(twistQuat).normalize();
+        }
 
         const splitGap = isSplit && t >= 0.12 && t <= 0.88 ? Math.min(7.2, effW * 0.28) : 0;
 
         if (i > 0 || activeSection.length === 0) {
-          pushSample(p, tangent, up, right, effW, false, splitGap, wallH);
+          pushSample(p, tangent, up, right, effW, hasTwist, splitGap, wallH);
         }
         pieceSamples.push({
           pos: p.clone(),
@@ -1345,16 +1368,23 @@ export function buildTrack(
           up,
           right,
           width: effW,
-          isLoop: false,
+          isLoop: hasTwist,
           splitGap,
           wallHeight: wallH,
         });
       }
 
-      curPos.copy(pieceSamples[pieceSamples.length - 1].pos);
-      curForward.copy(pieceSamples[pieceSamples.length - 1].forward);
-      curUp.copy(pieceSamples[pieceSamples.length - 1].up);
-      curRight.copy(pieceSamples[pieceSamples.length - 1].right);
+      const lastSample = pieceSamples[pieceSamples.length - 1];
+      curPos.copy(lastSample.pos);
+      curForward.copy(lastSample.forward);
+      if (hasTwist) {
+        // Snap end basis cleanly upright after symmetric wall-twist or full 360 corkscrew
+        curUp.set(0, 1, 0);
+        curRight.copy(curForward).cross(curUp).normalize();
+      } else {
+        curUp.copy(lastSample.up);
+        curRight.copy(lastSample.right);
+      }
 
       const resolvedScenery: SceneryStyle =
         piece.scenery ??
@@ -2202,6 +2232,18 @@ export function buildTrack(
     spawnPoint,
     endPose,
     gripMultiplier: groundSpecs.gripMultiplier,
+    setNeonColors: (primaryHex, secondaryHex, emissiveBoost = 1) => {
+      railPrimaryMat.color.set(primaryHex);
+      railPrimaryMat.emissive.set(primaryHex);
+      railPrimaryMat.emissiveIntensity = 2.2 * emissiveBoost;
+      railSecondaryMat.color.set(secondaryHex);
+      railSecondaryMat.emissive.set(secondaryHex);
+      railSecondaryMat.emissiveIntensity = 2.0 * emissiveBoost;
+      boostMat.emissive.set(primaryHex);
+      boostMat.emissiveIntensity = 2.4 * emissiveBoost;
+      ringMat.color.set(secondaryHex);
+      ringMat.emissive.set(secondaryHex);
+    },
     queryQuads: (x, z, out) => colliderHash.query(x, z, out),
     getGripAt: () => groundSpecs.gripMultiplier,
     forEachBoostZone: (fn) => {

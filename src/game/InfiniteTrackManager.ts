@@ -199,6 +199,23 @@ export class InfiniteTrackManager implements TrackQueryTarget {
     return this.chunks[0].track.spawnPoint;
   }
 
+  public applyNeonOverride(
+    primaryHex: THREE.ColorRepresentation,
+    secondaryHex: THREE.ColorRepresentation,
+    emissiveBoost = 1,
+  ): void {
+    for (let i = 0; i < this.chunks.length; i++) {
+      this.chunks[i].track.setNeonColors(primaryHex, secondaryHex, emissiveBoost);
+    }
+  }
+
+  public restoreChunkColors(): void {
+    for (let i = 0; i < this.chunks.length; i++) {
+      const c = this.chunks[i];
+      c.track.setNeonColors(c.biome.accentColor, c.biome.secondaryColor, 1);
+    }
+  }
+
   private pickBiomeForChunk(chunkIndex: number, rand: () => number): BiomeProfile {
     if (chunkIndex < 6) {
       // Tour every unique road design & ground theme across sectors 1-6
@@ -376,33 +393,62 @@ export class InfiniteTrackManager implements TrackQueryTarget {
       });
     }
 
-    // 3. Second themed stunt straight with fresh traps + Speed Ring
-    const midStyle =
-      rand() < 0.45 && chunkIndex > 0
+    // 3. Second themed stunt straight — periodically spawns a Rotated Gravity Section!
+    const useGravityTwist =
+      chunkIndex === 0 || (chunkIndex >= 1 && rand() < 0.52);
+    const twistMode: 'wall' | 'corkscrew' =
+      chunkIndex >= 1 && rand() < 0.45 ? 'corkscrew' : 'wall';
+    const twistSign = rand() < 0.5 ? 1 : -1;
+    const twistDeg = useGravityTwist
+      ? twistMode === 'corkscrew'
+        ? twistSign * 360
+        : twistSign * (58 + Math.round(rand() * 14))
+      : 0;
+
+    const midStyle: RoadDesign = useGravityTwist
+      ? twistMode === 'corkscrew'
+        ? 'hyper-tube'
+        : 'highway'
+      : rand() < 0.45 && chunkIndex > 0
         ? BIOME_PROFILES[Math.floor(rand() * BIOME_PROFILES.length)].roadStyle
         : biome.roadStyle;
     const midW = midStyle === 'narrow-beam' ? 16 : midStyle === 'split-bridge' ? 25 : 22;
-    const midLen = 200 + Math.round(rand() * 50);
+    const midLen = useGravityTwist
+      ? twistMode === 'corkscrew'
+        ? 240
+        : 210
+      : 200 + Math.round(rand() * 50);
 
     let midElev = 0;
-    if (this.cumulativeElevationY > 12) midElev = -6;
-    else if (this.cumulativeElevationY < -6) midElev = 6;
-    this.cumulativeElevationY += midElev;
+    if (!useGravityTwist) {
+      if (this.cumulativeElevationY > 12) midElev = -6;
+      else if (this.cumulativeElevationY < -6) midElev = 6;
+      this.cumulativeElevationY += midElev;
+    }
 
     const midPiece: Extract<TrackPiece, { type: 'straight' }> = {
       type: 'straight',
       length: midLen,
       width: midW,
       elevation: midElev,
+      twistDeg,
+      twistMode,
       roadStyle: midStyle,
       scenery: midStyle === 'hyper-tube' ? 'arches' : biome.scenery,
-      boostPads: midStyle === 'split-bridge' ? [0.22] : [0.25, 0.78],
+      boostPads: midStyle === 'split-bridge' ? [0.22] : [0.18, 0.78],
     };
     this.addTrapsToStraight(midPiece, midStyle, diffScale + 0.5, rand, 0.48);
-    if (sector >= 2) {
+    if (sector >= 2 && !useGravityTwist) {
       this.addTrapsToStraight(midPiece, midStyle, diffScale + 0.5, rand, 0.76);
     }
-    const ringLane = midStyle === 'split-bridge' ? (rand() < 0.5 ? -0.28 : 0.28) : (rand() - 0.5) * 0.4;
+    const ringLane =
+      midStyle === 'split-bridge'
+        ? rand() < 0.5
+          ? -0.28
+          : 0.28
+        : useGravityTwist
+          ? 0
+          : (rand() - 0.5) * 0.4;
     midPiece.rings = [{ t: 0.62, height: 3.3, laneRatio: ringLane }];
     pieces.push(midPiece);
 

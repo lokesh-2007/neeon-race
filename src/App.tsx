@@ -415,7 +415,7 @@ export default function App() {
             </div>
 
             <div className="hidden sm:block text-xs text-slate-400">
-              WASD / Arrows · Space Nitro
+              WASD / Arrows · Space Nitro · Shift Jump
             </div>
           </div>
         </div>

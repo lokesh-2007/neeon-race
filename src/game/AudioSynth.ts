@@ -1,3 +1,5 @@
+import { EnvironmentalEventType } from './types';
+
 export class AudioSynth {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -368,6 +370,52 @@ export class AudioSynth {
     gain.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + 0.3);
+  }
+
+  public playJump(): void {
+    this.unlock();
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(190, now);
+    osc.frequency.exponentialRampToValueAtTime(490, now + 0.15);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.17, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.18);
+  }
+
+  public playEventPulse(eventType: EnvironmentalEventType): void {
+    this.unlock();
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const notes =
+      eventType === 'neon-storm'
+        ? [220, 329.63, 440, 659.25]
+        : eventType === 'gravity-flux'
+          ? [293.66, 440, 587.33, 880]
+          : [261.63, 392, 523.25, 783.99];
+
+    notes.forEach((freq, idx) => {
+      if (!this.ctx || !this.masterGain) return;
+      const t = now + idx * 0.06;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = eventType === 'neon-storm' ? 'sawtooth' : 'triangle';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(0.14, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.42);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.45);
+    });
   }
 
   public playImpact(): void {

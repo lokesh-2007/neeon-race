@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
   Coins,
@@ -7,11 +8,13 @@ import {
   Gamepad2,
   Ghost,
   Infinity as InfinityIcon,
+  Orbit,
   Pause,
   RotateCcw,
   Shield,
   Volume2,
   VolumeX,
+  Zap,
 } from 'lucide-react';
 import { FATAL_TRAP_SPEED_KMH, HudTelemetry, InputState, LevelDefinition } from '../game/types';
 
@@ -299,6 +302,56 @@ export const RacingHud: React.FC<RacingHudProps> = ({
             Checkpoint · Nitro Recharged
           </div>
         ) : null}
+
+        {/* Active Infinite Environmental Event Banner */}
+        {inf?.activeEvent && (
+          <div
+            className="mx-auto flex w-full max-w-[300px] sm:max-w-[340px] flex-col gap-1 rounded-lg border bg-[#070913]/90 px-3 py-1.5"
+            style={{ borderColor: `${inf.activeEvent.accentColor}88` }}
+          >
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-1.5 font-display font-bold uppercase tracking-wider">
+                {inf.activeEvent.type === 'neon-storm' ? (
+                  <Zap
+                    className="h-3.5 w-3.5 shrink-0"
+                    style={{ color: inf.activeEvent.accentColor }}
+                  />
+                ) : inf.activeEvent.type === 'gravity-flux' ? (
+                  <Orbit
+                    className="h-3.5 w-3.5 shrink-0"
+                    style={{ color: inf.activeEvent.accentColor }}
+                  />
+                ) : (
+                  <Flame
+                    className="h-3.5 w-3.5 shrink-0"
+                    style={{ color: inf.activeEvent.accentColor }}
+                  />
+                )}
+                <span style={{ color: inf.activeEvent.accentColor }}>
+                  {inf.activeEvent.label}
+                </span>
+              </div>
+              <span className="font-display text-[11px] font-semibold tabular-nums text-slate-300">
+                {inf.activeEvent.remainingSec.toFixed(1)}s
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-300 truncate">
+              {inf.activeEvent.description}
+            </div>
+            <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full transition-all duration-75"
+                style={{
+                  width: `${Math.max(
+                    0,
+                    Math.min(100, (inf.activeEvent.remainingSec / inf.activeEvent.durationSec) * 100),
+                  )}%`,
+                  backgroundColor: inf.activeEvent.accentColor,
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bottom Area: Phone Touch Controls & Desktop Telemetry */}
@@ -327,7 +380,9 @@ export const RacingHud: React.FC<RacingHudProps> = ({
           <div className="hidden md:flex items-center gap-3 rounded-lg border border-white/10 bg-[#070913]/80 px-3.5 py-2 text-xs text-slate-300">
             <span>WASD / Arrows: Drive</span>
             <span aria-hidden="true">·</span>
-            <span>Space / Shift: Nitro</span>
+            <span>Space: Nitro</span>
+            <span aria-hidden="true">·</span>
+            <span>Shift: Jump</span>
             <span aria-hidden="true">·</span>
             <span>R: Respawn</span>
             <span aria-hidden="true">·</span>
@@ -335,33 +390,53 @@ export const RacingHud: React.FC<RacingHudProps> = ({
           </div>
         )}
 
-        {/* Bottom-Right: Touch Pedals + Desktop Telemetry Cluster */}
-        <div className="flex items-end gap-3 ml-auto">
-          {showTouch && (
-            <div className="pointer-events-auto flex items-end gap-2 sm:gap-2.5">
+        {/* Bottom-Right: Touch Pedals + Desktop Jump Button + Telemetry Cluster */}
+        <div className="flex items-end gap-2.5 sm:gap-3 ml-auto">
+          {showTouch ? (
+            <div className="pointer-events-auto flex items-end gap-1.5 sm:gap-2.5">
               <button
                 type="button"
                 {...bindHold('brake')}
-                className="touch-none select-none flex h-13 w-13 sm:h-15 sm:w-15 items-center justify-center rounded-2xl border border-rose-400/45 bg-[#070913]/80 text-[11px] sm:text-xs font-semibold text-rose-200 active:bg-rose-500/35"
+                className="touch-none select-none flex h-12 w-12 sm:h-15 sm:w-15 items-center justify-center rounded-2xl border border-rose-400/45 bg-[#070913]/80 text-[11px] sm:text-xs font-semibold text-rose-200 active:bg-rose-500/35"
               >
                 Brake
               </button>
               <button
                 type="button"
+                aria-label="Jump"
+                {...bindHold('jump')}
+                className="touch-none select-none flex h-12 w-12 sm:h-15 sm:w-15 flex-col items-center justify-center gap-0.5 rounded-2xl border border-amber-400/55 bg-[#070913]/85 text-[10px] sm:text-xs font-bold text-amber-200 active:bg-amber-500/35"
+              >
+                <ArrowUp className="h-4 w-4 sm:h-5 sm:w-5" />
+                <span>Jump</span>
+              </button>
+              <button
+                type="button"
                 aria-label="Nitro Boost"
                 {...bindHold('boost')}
-                className="touch-none select-none flex h-13 w-13 sm:h-15 sm:w-15 items-center justify-center rounded-2xl border border-fuchsia-400/50 bg-[#070913]/80 text-fuchsia-200 active:bg-fuchsia-500/35"
+                className="touch-none select-none flex h-12 w-12 sm:h-15 sm:w-15 items-center justify-center rounded-2xl border border-fuchsia-400/50 bg-[#070913]/80 text-fuchsia-200 active:bg-fuchsia-500/35"
               >
                 <Flame className="h-5 w-5 sm:h-6 sm:w-6" />
               </button>
               <button
                 type="button"
                 {...bindHold('throttle')}
-                className="touch-none select-none flex h-16 w-15 sm:h-20 sm:w-18 items-center justify-center rounded-2xl border border-[#39ff14]/55 bg-[#070913]/85 text-xs sm:text-sm font-bold text-[#39ff14] active:bg-[#39ff14]/25"
+                className="touch-none select-none flex h-15 w-14 sm:h-20 sm:w-18 items-center justify-center rounded-2xl border border-[#39ff14]/55 bg-[#070913]/85 text-xs sm:text-sm font-bold text-[#39ff14] active:bg-[#39ff14]/25"
               >
                 Gas
               </button>
             </div>
+          ) : (
+            <button
+              type="button"
+              aria-label="Jump (Shift)"
+              title="Jump (Shift)"
+              {...bindHold('jump')}
+              className="pointer-events-auto hidden md:flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-xl border border-amber-400/55 bg-[#070913]/88 text-xs font-bold text-amber-200 transition-colors hover:border-amber-300 hover:bg-amber-500/20 active:bg-amber-500/35 cursor-pointer select-none"
+            >
+              <ArrowUp className="h-5 w-5" />
+              <span>Jump</span>
+            </button>
           )}
 
           {/* Desktop / Tablet Speed & Nitro Cluster */}

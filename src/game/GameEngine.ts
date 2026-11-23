@@ -9,6 +9,8 @@ import { LEVELS } from './levels';
 import { buildTrack, BuiltTrack } from './TrackBuilder';
 import {
   CrashEvent,
+  EnvironmentalEventHud,
+  EnvironmentalEventType,
   GarageConfig,
   GhostFrame,
   GhostRun,
@@ -38,6 +40,9 @@ const _ghostPosA = new THREE.Vector3();
 const _ghostPosB = new THREE.Vector3();
 const _ghostQuatA = new THREE.Quaternion();
 const _ghostQuatB = new THREE.Quaternion();
+const _eventColorA = new THREE.Color();
+const _eventColorB = new THREE.Color();
+const _eventBgColor = new THREE.Color();
 
 interface ParticleSlot {
   active: boolean;
@@ -210,6 +215,7 @@ export class GameEngine {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private keyLight: THREE.DirectionalLight;
+  private rimLight: THREE.DirectionalLight;
   private composer: EffectComposer | null = null;
   private bloomPass: UnrealBloomPass | null = null;
 
@@ -231,6 +237,14 @@ export class GameEngine {
   private infiniteAccentColor = '#00f3ff';
   private infiniteSecondaryColor = '#ff007f';
   private lastSectorFlash = 0;
+
+  // Infinite Mode procedural environmental events
+  private activeEventType: EnvironmentalEventType | null = null;
+  private eventRemainingSec = 0;
+  private readonly eventDurationSec = 9.5;
+  private eventCooldownSec = 9.0;
+  private lastEventType: EnvironmentalEventType | null = null;
+  private envParticlesAccum = 0;
 
   // Ghost recording & replay
   private ghostEnabled: boolean;
@@ -268,6 +282,7 @@ export class GameEngine {
     left: false,
     right: false,
     boost: false,
+    jump: false,
     pitchUp: false,
     pitchDown: false,
     rollLeft: false,
@@ -284,8 +299,8 @@ export class GameEngine {
     KeyD: 'right',
     ArrowRight: 'right',
     Space: 'boost',
-    ShiftLeft: 'boost',
-    ShiftRight: 'boost',
+    ShiftLeft: 'jump',
+    ShiftRight: 'jump',
     KeyQ: 'rollLeft',
     KeyE: 'rollRight',
   };
@@ -365,9 +380,9 @@ export class GameEngine {
       this.keyLight.shadow.camera.bottom = -55;
       this.keyLight.shadow.bias = -0.0005;
     }
-    const rimLight = new THREE.DirectionalLight(0xff007f, 1.15);
-    rimLight.position.set(-50, 35, -70);
-    this.scene.add(hemi, this.keyLight, this.keyLight.target, rimLight);
+    this.rimLight = new THREE.DirectionalLight(0xff007f, 1.15);
+    this.rimLight.position.set(-50, 35, -70);
+    this.scene.add(hemi, this.keyLight, this.keyLight.target, this.rimLight);
 
     // Abyss Cyber Grid Floor
     const maxAniso = Math.min(this.isCompactMobile ? 4 : 8, this.renderer.capabilities.getMaxAnisotropy());
@@ -690,6 +705,7 @@ export class GameEngine {
     this.infiniteSector = 1;
     this.infiniteDistanceM = 0;
     this.lastSectorFlash = 0;
+    this.resetEnvironmentalEvent(false);
 
     const maxAniso = Math.min(
       this.isCompactMobile ? 4 : 8,
@@ -846,8 +862,55 @@ export class GameEngine {
     this.sunMat.color.setHex(themeColors.sunHex);
   }
 
+  private resetEnvironmentalEvent(restoreColors = true): void {
+    this.activeEventType = null;
+    this.eventRemainingSec = 0;
+    this.eventCooldownSec = 8.5;
+    this.envParticlesAccum = 0;
+    this.horizonGroup.rotation.z = 0;
+    this.rimLight.color.setHex(0xff007f);
+    if (restoreColors && this.infiniteManager) {
+      this.infiniteManager.restoreChunkColors();
+      this.applyBiomeAtmosphere(this.infiniteManager.getActiveBiome().groundTheme);
+    }
+  }
+
+  private getActiveEventHud(): EnvironmentalEventHud | null {
+    if (!this.activeEventType || this.eventRemainingSec <= 0) return null;
+    switch (this.activeEventType) {
+      case 'neon-storm':
+        return {
+          type: 'neon-storm',
+          label: 'Neon Storm Pulse',
+          description: 'Chromatic surge · High-voltage rails',
+          remainingSec: this.eventRemainingSec,
+          durationSec: this.eventDurationSec,
+          accentColor: '#00f3ff',
+        };
+      case 'gravity-flux':
+        return {
+          type: 'gravity-flux',
+          label: 'Low-G Ion Flux',
+          description: '0.56x Air Gravity · High Jump Lift',
+          remainingSec: this.eventRemainingSec,
+          durationSec: this.eventDurationSec,
+          accentColor: '#9d00ff',
+        };
+      case 'solar-overdrive':
+        return {
+          type: 'solar-overdrive',
+          label: 'Solar Overdrive',
+          description: '+43 KM/H Top Speed · 2.2x Nitro Regen',
+          remainingSec: this.eventRemainingSec,
+          durationSec: this.eventDurationSec,
+          accentColor: '#ffaa00',
+        };
+    }
+  }
+
   private loadLevel(level: LevelDefinition, bestGhost: GhostRun | null): void {
     this.infiniteMode = false;
+    this.resetEnvironmentalEvent(false);
     if (this.infiniteManager) {
       this.scene.remove(this.infiniteManager.group);
       this.infiniteManager.dispose();
@@ -958,6 +1021,7 @@ export class GameEngine {
             maxShields: this.infiniteMaxShields,
             lastRingFlash: this.vehicle.lastRingFlash,
             lastSectorFlash: this.lastSectorFlash,
+            activeEvent: this.getActiveEventHud(),
           }
         : null,
     });
@@ -1020,11 +1084,50 @@ export class GameEngine {
 
     if (this.mode === 'playing' && activeTrack) {
       this.runElapsedSec += dt;
+
+      if (this.infiniteMode && this.infiniteManager) {
+        if (this.activeEventType) {
+          this.eventRemainingSec -= dt;
+          if (this.eventRemainingSec <= 0) {
+            this.activeEventType = null;
+            this.eventRemainingSec = 0;
+            this.eventCooldownSec = 11 + Math.random() * 3.5;
+            this.horizonGroup.rotation.z = 0;
+            this.rimLight.color.setHex(0xff007f);
+            this.infiniteManager.restoreChunkColors();
+            this.applyBiomeAtmosphere(this.infiniteManager.getActiveBiome().groundTheme);
+          }
+        } else {
+          this.eventCooldownSec -= dt;
+          if (this.eventCooldownSec <= 0) {
+            const eventPool: EnvironmentalEventType[] = [
+              'neon-storm',
+              'gravity-flux',
+              'solar-overdrive',
+            ];
+            const candidates = eventPool.filter((ev) => ev !== this.lastEventType);
+            const nextType = candidates[Math.floor(Math.random() * candidates.length)];
+            this.activeEventType = nextType;
+            this.lastEventType = nextType;
+            this.eventRemainingSec = this.eventDurationSec;
+            this.audio.playEventPulse(nextType);
+          }
+        }
+      }
+
+      const envMod =
+        this.infiniteMode && this.activeEventType === 'gravity-flux'
+          ? { gravityScale: 0.56 }
+          : this.infiniteMode && this.activeEventType === 'solar-overdrive'
+            ? { speedBonus: 12, nitroRegenMult: 2.2 }
+            : undefined;
+
       const { finished, fellIntoAbyss, fatalCrash } = this.vehicle.step(
         dt,
         this.input,
         activeTrack,
         this.audio,
+        envMod,
       );
 
       if (fatalCrash) {
@@ -1098,6 +1201,90 @@ export class GameEngine {
           this.infiniteAccentColor = stream.activeBiome.accentColor;
           this.infiniteSecondaryColor = stream.activeBiome.secondaryColor;
           this.applyBiomeAtmosphere(stream.activeBiome.groundTheme);
+        }
+
+        // Apply active environmental event lighting, color pulses & ambient particles
+        if (this.activeEventType) {
+          this.envParticlesAccum += dt;
+          const emitEnvParticles = this.qualityMode !== 'eco' && this.envParticlesAccum >= 0.04;
+          if (emitEnvParticles) {
+            this.envParticlesAccum = 0;
+          }
+
+          if (this.activeEventType === 'neon-storm') {
+            const hueA = (elapsed * 0.28) % 1;
+            const hueB = (hueA + 0.42) % 1;
+            _eventColorA.setHSL(hueA, 0.96, 0.56);
+            _eventColorB.setHSL(hueB, 0.96, 0.56);
+            const pulse = 1.05 + 0.48 * Math.sin(elapsed * 9.5);
+            this.infiniteManager.applyNeonOverride(_eventColorA, _eventColorB, pulse);
+            this.sunMat.color.copy(_eventColorA);
+            this.rimLight.color.copy(_eventColorB);
+            _eventBgColor.setHSL(hueA, 0.6, 0.045);
+            (this.scene.background as THREE.Color).copy(_eventBgColor);
+            (this.scene.fog as THREE.FogExp2).color.copy(_eventBgColor);
+            if (emitEnvParticles) {
+              const pHex = `#${_eventColorA.getHexString()}`;
+              this.spawnParticle(
+                this.vehicle.position.x + (Math.random() - 0.5) * 28,
+                this.vehicle.position.y + 8 + Math.random() * 8,
+                this.vehicle.position.z + (Math.random() - 0.5) * 28,
+                -8,
+                -26,
+                -10,
+                0.42,
+                2.8,
+                pHex,
+              );
+            }
+          } else if (this.activeEventType === 'gravity-flux') {
+            _eventColorA.setHex(0x9d00ff);
+            _eventColorB.setHex(0x00f3ff);
+            this.infiniteManager.applyNeonOverride(
+              _eventColorA,
+              _eventColorB,
+              1.25 + 0.2 * Math.sin(elapsed * 6),
+            );
+            this.sunMat.color.copy(_eventColorA);
+            this.rimLight.color.copy(_eventColorB);
+            this.horizonGroup.rotation.z = Math.sin(elapsed * 1.15) * 0.16;
+            if (emitEnvParticles) {
+              this.spawnParticle(
+                this.vehicle.position.x + (Math.random() - 0.5) * 26,
+                this.vehicle.position.y - 2 + Math.random() * 4,
+                this.vehicle.position.z + (Math.random() - 0.5) * 26,
+                (Math.random() - 0.5) * 2,
+                14 + Math.random() * 8,
+                (Math.random() - 0.5) * 2,
+                0.55,
+                1.9,
+                Math.random() < 0.5 ? '#00f3ff' : '#9d00ff',
+              );
+            }
+          } else if (this.activeEventType === 'solar-overdrive') {
+            _eventColorA.setHex(0xffaa00);
+            _eventColorB.setHex(0xff0055);
+            this.infiniteManager.applyNeonOverride(
+              _eventColorA,
+              _eventColorB,
+              1.3 + 0.25 * Math.sin(elapsed * 8),
+            );
+            this.sunMat.color.copy(_eventColorA);
+            this.rimLight.color.copy(_eventColorB);
+            if (emitEnvParticles) {
+              this.spawnParticle(
+                this.vehicle.position.x + (Math.random() - 0.5) * 24,
+                this.vehicle.position.y + 1 + Math.random() * 6,
+                this.vehicle.position.z + (Math.random() - 0.5) * 24,
+                (Math.random() - 0.5) * 5,
+                2 + Math.random() * 4,
+                18,
+                0.32,
+                3.2,
+                Math.random() < 0.5 ? '#ffaa00' : '#ff0055',
+              );
+            }
+          }
         }
       }
 
