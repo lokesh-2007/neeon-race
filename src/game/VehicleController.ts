@@ -1,14 +1,16 @@
 import * as THREE from 'three';
 import { AudioSynth } from './AudioSynth';
-import { BuiltTrack } from './TrackBuilder';
 import {
   CHASSIS_SPECS,
   ChassisId,
   ColliderQuad,
+  CrashEvent,
+  FATAL_TRAP_SPEED_KMH,
   GarageConfig,
   GLIDER_SPECS,
   GliderId,
   InputState,
+  TrackQueryTarget,
 } from './types';
 
 // Pre-allocated scratch math helpers (zero per-frame GC)
@@ -834,12 +836,14 @@ export class VehicleController {
   public airborneSec = 0;
   public respawns = 0;
   public lastCheckpointFlash = 0;
+  public lastRingFlash = 0;
   public hazardHitFlash = 0;
 
   private spec = CHASSIS_SPECS.interceptor;
   private gliderId: GliderId = 'aero-wings';
   private steeringSensitivity = 1.0;
   private boostPadTimer = 0;
+  private jumpPadCooldown = 0;
   private hazardCooldown = 0;
   private respawnPos = new THREE.Vector3(0, 0.85, -10);
   private respawnQuat = new THREE.Quaternion();
@@ -889,12 +893,16 @@ export class VehicleController {
     this.visuals.updateGliderDeploy(this.gliderOpen);
   }
 
-  public resetToTrack(track: BuiltTrack): void {
-    this.respawnPos.copy(track.spawnPoint.position);
+  public resetToSpawn(spawnPoint: {
+    position: THREE.Vector3;
+    forward: THREE.Vector3;
+    up: THREE.Vector3;
+  }): void {
+    this.respawnPos.copy(spawnPoint.position);
     _mat4.makeBasis(
-      _v1.crossVectors(track.spawnPoint.forward, track.spawnPoint.up).normalize(),
-      track.spawnPoint.up,
-      track.spawnPoint.forward.clone().negate(),
+      _v1.crossVectors(spawnPoint.forward, spawnPoint.up).normalize(),
+      spawnPoint.up,
+      spawnPoint.forward.clone().negate(),
     );
     this.respawnQuat.setFromRotationMatrix(_mat4);
 
@@ -904,7 +912,11 @@ export class VehicleController {
     this.respawns = 0;
     this.nitro = 100;
     this.boostPadTimer = 0;
+    this.jumpPadCooldown = 0;
     this.hazardCooldown = 0;
+    this.lastCheckpointFlash = 0;
+    this.lastRingFlash = 0;
+    this.hazardHitFlash = 0;
     this.gliding = false;
     this.gliderOpen = 0;
     this.visuals.updateGliderDeploy(0);
@@ -938,8 +950,8 @@ export class VehicleController {
     return Math.round(this.velocity.length() * 3.6);
   }
 
-  private findSupportingQuad(track: BuiltTrack): { quad: ColliderQuad; dist: number; proj: THREE.Vector3 } | null {
-    track.colliderHash.query(this.position.x, this.position.z, _candidates);
+  private findSupportingQuad(track: TrackQueryTarget): { quad: ColliderQuad; dist: number; proj: THREE.Vector3 } | null {
+    track.queryQuads(this.position.x, this.position.z, _candidates);
     if (_candidates.length === 0) return null;
 
     _up.set(0, 1, 0).applyQuaternion(this.quaternion).normalize();
@@ -983,14 +995,23 @@ export class VehicleController {
   public step(
     dt: number,
     input: InputState,
-    track: BuiltTrack,
+    track: TrackQueryTarget,
     audio: AudioSynth,
-  ): { finished: boolean; boostTriggered: boolean } {
+  ): {
+    finished: boolean;
+    boostTriggered: boolean;
+    fellIntoAbyss: boolean;
+    fatalCrash: CrashEvent | null;
+  } {
     const safeDt = Math.min(dt, 0.04);
     let boostTriggered = false;
+    let fatalCrash: CrashEvent | null = null;
 
     if (this.boostPadTimer > 0) {
       this.boostPadTimer = Math.max(0, this.boostPadTimer - safeDt);
+    }
+    if (this.jumpPadCooldown > 0) {
+      this.jumpPadCooldown = Math.max(0, this.jumpPadCooldown - safeDt);
     }
     if (this.hazardCooldown > 0) {
       this.hazardCooldown = Math.max(0, this.hazardCooldown - safeDt);
@@ -1096,7 +1117,7 @@ export class VehicleController {
         const latVel = this.velocity.dot(_right);
         this.drifting = Math.abs(latVel) > 6.5 && Math.abs(fwdSpeed) > 24;
         const baseGrip = Math.abs(steerInput) > 0.5 && Math.abs(fwdSpeed) > 42 ? 8.5 : 14.0;
-        const grip = baseGrip * track.gripMultiplier;
+        const grip = baseGrip * track.getGripAt(this.position.x, this.position.z);
         this.velocity.addScaledVector(_right, -latVel * Math.min(1, grip * safeDt));
 
         // Tangential gravity slope effect (suppressed on loops so magnetic loop flow stays exhilarating)
@@ -1185,8 +1206,7 @@ export class VehicleController {
     this.position.addScaledVector(this.velocity, safeDt);
 
     // Check Boost Zones
-    for (let i = 0; i < track.boostZones.length; i++) {
-      const bz = track.boostZones[i];
+    track.forEachBoostZone((bz) => {
       if (this.position.distanceToSquared(bz.center) < bz.radius * bz.radius) {
         if (this.boostPadTimer < 0.25) {
           boostTriggered = true;
@@ -1199,28 +1219,61 @@ export class VehicleController {
           this.velocity.addScaledVector(bz.forward, 65 * safeDt);
         }
       }
+    });
+
+    // Check Vertical Jump Pads
+    if (this.jumpPadCooldown <= 0) {
+      track.forEachJumpPad((jp) => {
+        if (this.jumpPadCooldown > 0) return;
+        if (this.position.distanceToSquared(jp.center) < jp.radius * jp.radius) {
+          this.jumpPadCooldown = 0.55;
+          this.grounded = false;
+          this.airborne = true;
+          this.velocity.y = Math.max(this.velocity.y, jp.impulse);
+          this.velocity.addScaledVector(jp.forward, 10);
+          this.position.y += 0.6;
+          this.nitro = Math.min(100, this.nitro + 18);
+          boostTriggered = true;
+          audio.playJumpPad();
+        }
+      });
     }
 
-    // Check Moving Obstacles (Lasers & Hammers)
-    if (this.hazardCooldown <= 0) {
-      for (let i = 0; i < track.obstacles.length; i++) {
-        if (track.obstacles[i].checkCollision(this.position, 1.25, _push)) {
-          this.hazardCooldown = 0.75;
+    // Check Moving Obstacles & Traps (high-speed impacts are fatal and end the run)
+    const preImpactSpeedKmh = this.getSpeedKmh();
+    if (this.hazardCooldown <= 0 || preImpactSpeedKmh >= FATAL_TRAP_SPEED_KMH) {
+      let hit = false;
+      track.forEachObstacle((obs) => {
+        if (hit) return;
+        if (obs.checkCollision(this.position, 1.25, _push)) {
+          hit = true;
           this.hazardHitFlash = performance.now();
-          audio.playImpact();
-          // Gentle speed trim & soft pushback so hazards don't throw player off the track
-          this.velocity.multiplyScalar(0.72);
-          _push.y = 0;
-          if (_push.lengthSq() > 0.001) _push.normalize();
-          this.velocity.addScaledVector(_push, 9);
-          break;
+          if (preImpactSpeedKmh >= FATAL_TRAP_SPEED_KMH) {
+            fatalCrash = {
+              trapType: obs.type,
+              speedKmh: preImpactSpeedKmh,
+            };
+            audio.playCrashExplosion();
+            this.velocity.multiplyScalar(0.22);
+            this.velocity.y = Math.max(this.velocity.y, 6);
+            _push.y = 0;
+            if (_push.lengthSq() > 0.001) _push.normalize();
+            this.velocity.addScaledVector(_push, 6);
+          } else {
+            this.hazardCooldown = 0.75;
+            audio.playImpact();
+            // Gentle speed trim & soft pushback on low-speed impacts
+            this.velocity.multiplyScalar(0.72);
+            _push.y = 0;
+            if (_push.lengthSq() > 0.001) _push.normalize();
+            this.velocity.addScaledVector(_push, 9);
+          }
         }
-      }
+      });
     }
 
     // Check Checkpoints
-    for (let i = 0; i < track.checkpoints.length; i++) {
-      const cp = track.checkpoints[i];
+    track.forEachCheckpoint((cp) => {
       if (!cp.activated) {
         const halfW = cp.width * 0.5 + 1.5;
         _v1.subVectors(this.position, cp.position);
@@ -1242,33 +1295,45 @@ export class VehicleController {
           this.respawnQuat.setFromRotationMatrix(_mat4);
         }
       }
-    }
+    });
 
     // Check Collectible Coins
-    for (let i = 0; i < track.coins.length; i++) {
-      const coin = track.coins[i];
-      if (coin.collected) continue;
+    track.forEachCoin((coin, markCollected) => {
+      if (coin.collected) return;
       if (this.position.distanceToSquared(coin.basePosition) < 3.4 * 3.4) {
-        track.markCoinCollected(i);
+        markCollected();
         this.coinsCollected += 1;
         this.nitro = Math.min(100, this.nitro + 6);
         audio.playCoin();
       }
-    }
+    });
 
-    // Check Finish Gate
+    // Check Stunt Speed Rings (+5 coins, +45 nitro, forward surge)
+    track.forEachRing((ring, markCollected) => {
+      if (ring.collected) return;
+      if (this.position.distanceToSquared(ring.center) < ring.radius * ring.radius) {
+        markCollected();
+        this.coinsCollected += 5;
+        this.nitro = Math.min(100, this.nitro + 45);
+        this.boostPadTimer = Math.max(this.boostPadTimer, 0.9);
+        this.velocity.addScaledVector(ring.forward, 14);
+        this.lastRingFlash = performance.now();
+        boostTriggered = true;
+        audio.playRing();
+      }
+    });
+
+    // Check Finish Gate (when present in fixed circuits)
     let finished = false;
-    _v1.subVectors(this.position, track.finishGate.position);
-    const fFwd = Math.abs(_v1.dot(track.finishGate.forward));
-    if (fFwd < 5.0 && _v1.length() < track.finishGate.width * 0.65 + 2.5) {
-      finished = true;
+    if (track.finishGate) {
+      _v1.subVectors(this.position, track.finishGate.position);
+      const fFwd = Math.abs(_v1.dot(track.finishGate.forward));
+      if (fFwd < 5.0 && _v1.length() < track.finishGate.width * 0.65 + 2.5) {
+        finished = true;
+      }
     }
 
-    // Auto-respawn if fallen into neon grid abyss
-    if (this.position.y < -52) {
-      this.respawn(true);
-      audio.playImpact();
-    }
+    const fellIntoAbyss = this.position.y < this.respawnPos.y - 52;
 
     // Update 3D visuals (wheels, steering pivots, exhaust flames, glider wings, underglow)
     this.visuals.root.position.copy(this.position);
@@ -1298,6 +1363,11 @@ export class VehicleController {
 
     this.visuals.underglow.intensity = this.boosting ? 8.5 : 4.5;
 
-    return { finished, boostTriggered };
+    return {
+      finished: fatalCrash ? false : finished,
+      boostTriggered,
+      fellIntoAbyss: fatalCrash ? false : fellIntoAbyss,
+      fatalCrash,
+    };
   }
 }

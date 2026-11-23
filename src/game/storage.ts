@@ -30,6 +30,8 @@ function buildDefaultSave(): SavedProgress {
     steeringSensitivity: 1.0,
     graphicsQuality: 'auto',
     totalCoins: 0,
+    bestInfiniteDistanceM: 0,
+    bestInfiniteSector: 0,
     dailyMissions: createFreshDailyMissions(),
   };
 }
@@ -83,6 +85,16 @@ export function loadProgress(): SavedProgress {
           ? parsed.graphicsQuality
           : defaults.graphicsQuality,
       totalCoins: Number.isFinite(coins) && coins >= 0 ? Math.floor(coins) : 0,
+      bestInfiniteDistanceM:
+        Number.isFinite(Number(parsed.bestInfiniteDistanceM)) &&
+        Number(parsed.bestInfiniteDistanceM) >= 0
+          ? Math.floor(Number(parsed.bestInfiniteDistanceM))
+          : 0,
+      bestInfiniteSector:
+        Number.isFinite(Number(parsed.bestInfiniteSector)) &&
+        Number(parsed.bestInfiniteSector) >= 0
+          ? Math.floor(Number(parsed.bestInfiniteSector))
+          : 0,
       dailyMissions,
     };
   } catch {
@@ -225,6 +237,8 @@ export function recordLevelCompletion(
       case 'single_run_airborne_sec':
         nextVal = Math.max(before, Math.floor(airborneSec));
         break;
+      case 'infinite_distance_m':
+        break;
     }
     const clamped = Math.min(m.target, nextVal);
     current.dailyMissions.progress[m.id] = clamped;
@@ -235,4 +249,66 @@ export function recordLevelCompletion(
 
   saveProgress(current);
   return { progress: current, isNewBest, medal, newlyCompletedMissions };
+}
+
+export function recordInfiniteCompletion(
+  distanceM: number,
+  sector: number,
+  coinsCollected: number,
+  airborneSec: number,
+): {
+  progress: SavedProgress;
+  isNewBestDistance: boolean;
+  newlyCompletedMissions: DailyMissionDefinition[];
+} {
+  const current = loadProgress();
+  const safeDist = Math.max(0, Math.floor(distanceM));
+  const safeSector = Math.max(1, Math.floor(sector));
+  const safeCoins = Math.max(0, Math.floor(coinsCollected));
+
+  const isNewBestDistance = safeDist > current.bestInfiniteDistanceM;
+  if (isNewBestDistance) {
+    current.bestInfiniteDistanceM = safeDist;
+  }
+  if (safeSector > current.bestInfiniteSector) {
+    current.bestInfiniteSector = safeSector;
+  }
+  current.totalCoins += safeCoins;
+
+  const activeDefs = getDailyMissionDefinitions(current.dailyMissions);
+  const newlyCompletedMissions: DailyMissionDefinition[] = [];
+
+  for (const m of activeDefs) {
+    const before = current.dailyMissions.progress[m.id] ?? 0;
+    let nextVal = before;
+    switch (m.metric) {
+      case 'levels_finished':
+        if (safeDist >= 1000) {
+          nextVal = before + 1;
+        }
+        break;
+      case 'single_run_coins':
+        nextVal = Math.max(before, safeCoins);
+        break;
+      case 'total_coins_today':
+        nextVal = before + safeCoins;
+        break;
+      case 'single_run_airborne_sec':
+        nextVal = Math.max(before, Math.floor(airborneSec));
+        break;
+      case 'infinite_distance_m':
+        nextVal = Math.max(before, safeDist);
+        break;
+      default:
+        break;
+    }
+    const clamped = Math.min(m.target, nextVal);
+    current.dailyMissions.progress[m.id] = clamped;
+    if (before < m.target && clamped >= m.target) {
+      newlyCompletedMissions.push(m);
+    }
+  }
+
+  saveProgress(current);
+  return { progress: current, isNewBestDistance, newlyCompletedMissions };
 }

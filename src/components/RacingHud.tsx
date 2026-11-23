@@ -6,12 +6,14 @@ import {
   Flame,
   Gamepad2,
   Ghost,
+  Infinity as InfinityIcon,
   Pause,
   RotateCcw,
+  Shield,
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { HudTelemetry, InputState, LevelDefinition } from '../game/types';
+import { FATAL_TRAP_SPEED_KMH, HudTelemetry, InputState, LevelDefinition } from '../game/types';
 
 interface RacingHudProps {
   level: LevelDefinition;
@@ -56,18 +58,26 @@ export const RacingHud: React.FC<RacingHudProps> = ({
     setShowTouch(isTouch);
   }, []);
 
+  const inf = hud.infiniteStats;
+  const ringFlashMs = inf?.lastRingFlash ?? 0;
+  const sectorFlashMs = inf?.lastSectorFlash ?? 0;
+
   useEffect(() => {
     if (
       performance.now() - hud.lastCheckpointFlash < 1600 ||
-      performance.now() - hud.hazardHitFlash < 700
+      performance.now() - hud.hazardHitFlash < 700 ||
+      performance.now() - ringFlashMs < 1500 ||
+      performance.now() - sectorFlashMs < 2000
     ) {
       const id = window.setTimeout(() => setNowMs(performance.now()), 120);
       return () => window.clearTimeout(id);
     }
-  }, [hud.lastCheckpointFlash, hud.hazardHitFlash, nowMs]);
+  }, [hud.lastCheckpointFlash, hud.hazardHitFlash, ringFlashMs, sectorFlashMs, nowMs]);
 
   const cpFlashing = nowMs - hud.lastCheckpointFlash < 1400;
   const hitFlashing = nowMs - hud.hazardHitFlash < 500;
+  const ringFlashing = Boolean(inf && nowMs - ringFlashMs < 1300);
+  const sectorFlashing = Boolean(inf && nowMs - sectorFlashMs < 1900);
 
   const bindHold = (control: keyof InputState) => ({
     onContextMenu: (e: React.MouseEvent<HTMLButtonElement>) => e.preventDefault(),
@@ -98,28 +108,78 @@ export const RacingHud: React.FC<RacingHudProps> = ({
       {/* Top Bar */}
       <div className="flex flex-col gap-2">
         <div className="flex items-start justify-between gap-2 sm:gap-4">
-          {/* Top-Left: Level, Timer, Checkpoints (+ compact mobile speed/nitro) */}
+          {/* Top-Left: Level OR Infinite Telemetry (+ compact mobile speed/nitro) */}
           <div className="pointer-events-auto rounded-xl border border-white/15 bg-[#070913]/85 px-3 py-2 sm:px-4 sm:py-3">
-            <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-slate-400">
-              <span className="font-semibold text-cyan-300">Lv.{level.number}</span>
-              <span aria-hidden="true">·</span>
-              <span className="max-w-[110px] truncate text-slate-200 sm:max-w-none">{level.name}</span>
-            </div>
-            <div className="mt-0.5 flex items-baseline gap-2.5 sm:mt-1 sm:gap-4">
-              <span className="font-mono-tabular text-lg font-bold tracking-tight text-white sm:text-3xl">
-                {formatTimeSec(hud.elapsedSec)}
-              </span>
-              <span className="text-[11px] font-medium text-slate-300 tabular-nums sm:text-xs">
-                CP {hud.checkpointIndex}/{hud.totalCheckpoints}
-              </span>
-              <span className="flex items-center gap-1 text-[11px] font-semibold text-amber-300 tabular-nums sm:text-xs">
-                <Coins className="h-3.5 w-3.5" />
-                {hud.coins}/{hud.totalTrackCoins}
-              </span>
-            </div>
+            {inf ? (
+              <>
+                <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-slate-400">
+                  <span className="inline-flex items-center gap-1 font-semibold text-fuchsia-300">
+                    <InfinityIcon className="h-3.5 w-3.5" />
+                    Sector {inf.sector}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span className="max-w-[130px] truncate text-slate-200 sm:max-w-none">
+                    {inf.roadLabel}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex items-baseline gap-2.5 sm:mt-1 sm:gap-4">
+                  <span className="font-mono-tabular text-lg font-bold tracking-tight text-white sm:text-3xl">
+                    {inf.distanceM.toLocaleString()}
+                    <span className="ml-1 text-xs font-semibold text-cyan-300 sm:text-sm">m</span>
+                  </span>
+                  <div
+                    className="flex items-center gap-1"
+                    aria-label={`Shields: ${inf.shields} of ${inf.maxShields}`}
+                    title={`Shields: ${inf.shields}/${inf.maxShields} (+1 every 2 sectors)`}
+                  >
+                    <Shield className="h-3.5 w-3.5 text-cyan-300" />
+                    {Array.from({ length: inf.maxShields }).map((_, idx) => (
+                      <span
+                        key={idx}
+                        className={`h-2.5 w-3.5 rounded-sm border ${
+                          idx < inf.shields
+                            ? 'border-cyan-300 bg-cyan-400'
+                            : 'border-white/15 bg-white/5'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-amber-300 tabular-nums sm:text-xs">
+                    <Coins className="h-3.5 w-3.5" />
+                    {hud.coins}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-1.5 text-[11px] sm:text-xs text-slate-400">
+                  <span className="font-semibold text-cyan-300">Lv.{level.number}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="max-w-[110px] truncate text-slate-200 sm:max-w-none">
+                    {level.name}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex items-baseline gap-2.5 sm:mt-1 sm:gap-4">
+                  <span className="font-mono-tabular text-lg font-bold tracking-tight text-white sm:text-3xl">
+                    {formatTimeSec(hud.elapsedSec)}
+                  </span>
+                  <span className="text-[11px] font-medium text-slate-300 tabular-nums sm:text-xs">
+                    CP {hud.checkpointIndex}/{hud.totalCheckpoints}
+                  </span>
+                  <span className="flex items-center gap-1 text-[11px] font-semibold text-amber-300 tabular-nums sm:text-xs">
+                    <Coins className="h-3.5 w-3.5" />
+                    {hud.coins}/{hud.totalTrackCoins}
+                  </span>
+                </div>
+              </>
+            )}
             {/* Compact Mobile Speed & Nitro Bar (visible on < md or when touch active on small screens) */}
             <div className="mt-1.5 flex items-center gap-2.5 md:hidden">
-              <span className="font-display text-sm font-bold text-cyan-300 tabular-nums">
+              <span
+                className={`font-display text-sm font-bold tabular-nums ${
+                  hud.speedKmh >= FATAL_TRAP_SPEED_KMH ? 'text-rose-400' : 'text-cyan-300'
+                }`}
+              >
                 {hud.speedKmh} <span className="text-[10px] text-slate-400">KM/H</span>
               </span>
               <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
@@ -139,28 +199,38 @@ export const RacingHud: React.FC<RacingHudProps> = ({
             </div>
           </div>
 
-          {/* Center Transient Checkpoint Banner */}
-          {cpFlashing && (
+          {/* Center Transient Banner (Sector / Ring / Checkpoint) */}
+          {sectorFlashing && inf ? (
+            <div className="hidden lg:flex items-center rounded-lg border border-fuchsia-400/60 bg-[#14071d]/90 px-4 py-2 text-sm font-semibold tracking-wide text-fuchsia-300">
+              Sector {inf.sector} · {inf.roadLabel} · {inf.groundLabel}
+            </div>
+          ) : ringFlashing ? (
+            <div className="hidden lg:flex items-center rounded-lg border border-amber-400/60 bg-[#1a1104]/90 px-4 py-2 text-sm font-semibold tracking-wide text-amber-300">
+              Speed Ring · +5 Coins · Nitro Surge
+            </div>
+          ) : cpFlashing ? (
             <div className="hidden lg:flex items-center rounded-lg border border-[#39ff14]/50 bg-[#07150b]/90 px-4 py-2 text-sm font-semibold tracking-wide text-[#39ff14]">
               Checkpoint Activated · Nitro Recharged
             </div>
-          )}
+          ) : null}
 
           {/* Top-Right: Quick Actions */}
           <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
-            <button
-              type="button"
-              onClick={onToggleGhost}
-              title={ghostEnabled ? 'Hide Best Run Ghost' : 'Show Best Run Ghost'}
-              className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer sm:h-10 sm:px-3 ${
-                ghostEnabled
-                  ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200'
-                  : 'border-white/15 bg-[#070913]/85 text-slate-400 hover:border-white/30'
-              }`}
-            >
-              <Ghost className="h-4 w-4" />
-              <span className="hidden md:inline">{hud.ghostActive ? 'Ghost On' : 'Ghost'}</span>
-            </button>
+            {!inf && (
+              <button
+                type="button"
+                onClick={onToggleGhost}
+                title={ghostEnabled ? 'Hide Best Run Ghost' : 'Show Best Run Ghost'}
+                className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer sm:h-10 sm:px-3 ${
+                  ghostEnabled
+                    ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200'
+                    : 'border-white/15 bg-[#070913]/85 text-slate-400 hover:border-white/30'
+                }`}
+              >
+                <Ghost className="h-4 w-4" />
+                <span className="hidden md:inline">{hud.ghostActive ? 'Ghost On' : 'Ghost'}</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -215,12 +285,20 @@ export const RacingHud: React.FC<RacingHudProps> = ({
           </div>
         </div>
 
-        {/* Mobile Checkpoint Toast */}
-        {cpFlashing && (
+        {/* Mobile Transient Toast */}
+        {sectorFlashing && inf ? (
+          <div className="mx-auto flex lg:hidden items-center rounded-lg border border-fuchsia-400/60 bg-[#14071d]/90 px-3 py-1 text-xs font-semibold text-fuchsia-300">
+            Sector {inf.sector} · {inf.roadLabel}
+          </div>
+        ) : ringFlashing ? (
+          <div className="mx-auto flex lg:hidden items-center rounded-lg border border-amber-400/60 bg-[#1a1104]/90 px-3 py-1 text-xs font-semibold text-amber-300">
+            Speed Ring · +5 Coins
+          </div>
+        ) : cpFlashing ? (
           <div className="mx-auto flex lg:hidden items-center rounded-lg border border-[#39ff14]/50 bg-[#07150b]/90 px-3 py-1 text-xs font-semibold text-[#39ff14]">
             Checkpoint · Nitro Recharged
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Bottom Area: Phone Touch Controls & Desktop Telemetry */}
@@ -287,17 +365,27 @@ export const RacingHud: React.FC<RacingHudProps> = ({
           )}
 
           {/* Desktop / Tablet Speed & Nitro Cluster */}
-          <div className="pointer-events-auto hidden md:block min-w-[180px] rounded-xl border border-white/15 bg-[#070913]/88 px-4 py-3 text-right">
+          <div className="pointer-events-auto hidden md:block min-w-[190px] rounded-xl border border-white/15 bg-[#070913]/88 px-4 py-3 text-right">
             <div className="flex items-center justify-end gap-2 text-xs font-medium text-slate-400">
+              {hud.speedKmh >= FATAL_TRAP_SPEED_KMH && (
+                <span className="font-semibold text-rose-400">High-Speed Risk</span>
+              )}
               {hud.gliding && <span className="text-fuchsia-300">Gliding</span>}
               {!hud.gliding && hud.airborne && <span className="text-amber-300">Airborne</span>}
               {hud.drifting && <span className="text-fuchsia-400">Drift</span>}
               {hud.boosting && <span className="text-cyan-300">Nitro Active</span>}
-              {!hud.airborne && !hud.drifting && !hud.boosting && <span>Telemetry</span>}
+              {hud.speedKmh < FATAL_TRAP_SPEED_KMH &&
+                !hud.airborne &&
+                !hud.drifting &&
+                !hud.boosting && <span>Telemetry</span>}
             </div>
 
             <div className="mt-0.5 flex items-baseline justify-end gap-1.5">
-              <span className="font-display text-4xl font-bold tracking-tight text-white tabular-nums">
+              <span
+                className={`font-display text-4xl font-bold tracking-tight tabular-nums ${
+                  hud.speedKmh >= FATAL_TRAP_SPEED_KMH ? 'text-rose-400' : 'text-white'
+                }`}
+              >
                 {hud.speedKmh}
               </span>
               <span className="text-xs font-semibold text-slate-400">KM/H</span>

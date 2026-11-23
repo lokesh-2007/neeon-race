@@ -25,6 +25,16 @@ export type GroundTheme =
   | 'solar-sand'
   | 'cryo-ice';
 
+export type RoadDesign =
+  | 'highway'
+  | 'split-bridge'
+  | 'wave-deck'
+  | 'canyon-trench'
+  | 'hyper-tube'
+  | 'narrow-beam';
+
+export type SceneryStyle = 'none' | 'arches' | 'pylons' | 'chevrons';
+
 export interface ChassisSpec {
   id: ChassisId;
   name: string;
@@ -82,7 +92,8 @@ export type MissionMetric =
   | 'zero_respawn_finish'
   | 'gold_medal_finish'
   | 'mega_level_finish'
-  | 'single_run_airborne_sec';
+  | 'single_run_airborne_sec'
+  | 'infinite_distance_m';
 
 export interface DailyMissionDefinition {
   id: string;
@@ -109,6 +120,8 @@ export interface SavedProgress {
   steeringSensitivity: number; // 0.4 to 1.8 (1.0 default)
   graphicsQuality: GraphicsQuality;
   totalCoins: number;
+  bestInfiniteDistanceM: number;
+  bestInfiniteSector: number;
   dailyMissions: DailyMissionsSave;
 }
 
@@ -118,12 +131,19 @@ export type TrackPiece =
       length: number;
       width?: number;
       elevation?: number;
+      roadStyle?: RoadDesign;
+      scenery?: SceneryStyle;
       boostPads?: number[];
+      jumpPads?: { t: number; laneRatio?: number; impulse?: number }[];
+      rings?: { t: number; height?: number; laneRatio?: number }[];
       checkpoint?: boolean;
       lasers?: { t: number; mode: 'sweep' | 'pulse'; speed?: number; phase?: number }[];
       hammers?: { t: number; speed?: number; phase?: number }[];
       barriers?: { t: number; speed?: number; phase?: number }[];
       spinners?: { t: number; speed?: number; phase?: number }[];
+      spikes?: { t: number; speed?: number; phase?: number }[];
+      crushers?: { t: number; speed?: number; phase?: number; laneRatio?: number }[];
+      saws?: { t: number; speed?: number; phase?: number }[];
     }
   | {
       type: 'curve';
@@ -196,6 +216,22 @@ export interface BoostZone {
   radius: number;
 }
 
+export interface JumpPadZone {
+  center: THREE.Vector3;
+  forward: THREE.Vector3;
+  up: THREE.Vector3;
+  radius: number;
+  impulse: number;
+}
+
+export interface SpeedRingItem {
+  index: number;
+  center: THREE.Vector3;
+  forward: THREE.Vector3;
+  radius: number;
+  collected: boolean;
+}
+
 export interface CoinItem {
   index: number;
   basePosition: THREE.Vector3;
@@ -216,9 +252,42 @@ export interface CheckpointGate {
 }
 
 export interface MovingObstacle {
-  type: 'laser' | 'hammer' | 'barrier' | 'spinner';
+  type: 'laser' | 'hammer' | 'barrier' | 'spinner' | 'spikes' | 'crusher' | 'saw';
   update: (elapsed: number) => void;
   checkCollision: (carPos: THREE.Vector3, carRadius: number, outPush: THREE.Vector3) => boolean;
+}
+
+export const FATAL_TRAP_SPEED_KMH = 165;
+
+export interface CrashEvent {
+  trapType: MovingObstacle['type'];
+  speedKmh: number;
+}
+
+export const TRAP_LABELS: Record<MovingObstacle['type'], string> = {
+  laser: 'Laser Barrier',
+  hammer: 'Pendulum Hammer',
+  barrier: 'Pinch Gate',
+  spinner: 'Plasma Spinner',
+  spikes: 'Spike Strip',
+  crusher: 'Drop Crusher',
+  saw: 'Plasma Saw',
+};
+
+export interface TrackQueryTarget {
+  queryQuads: (x: number, z: number, out: ColliderQuad[]) => void;
+  getGripAt: (x: number, z: number) => number;
+  forEachBoostZone: (fn: (bz: BoostZone) => void) => void;
+  forEachJumpPad: (fn: (jp: JumpPadZone) => void) => void;
+  forEachObstacle: (fn: (obs: MovingObstacle) => void) => void;
+  forEachCheckpoint: (fn: (cp: CheckpointGate) => void) => void;
+  forEachCoin: (fn: (coin: CoinItem, markCollected: () => void) => void) => void;
+  forEachRing: (fn: (ring: SpeedRingItem, markCollected: () => void) => void) => void;
+  finishGate: {
+    position: THREE.Vector3;
+    forward: THREE.Vector3;
+    width: number;
+  } | null;
 }
 
 export interface InputState {
@@ -231,6 +300,18 @@ export interface InputState {
   pitchDown: boolean;
   rollLeft: boolean;
   rollRight: boolean;
+}
+
+export interface InfiniteHudStats {
+  distanceM: number;
+  bestDistanceM: number;
+  sector: number;
+  roadLabel: string;
+  groundLabel: string;
+  shields: number;
+  maxShields: number;
+  lastRingFlash: number;
+  lastSectorFlash: number;
 }
 
 export interface HudTelemetry {
@@ -249,6 +330,7 @@ export interface HudTelemetry {
   respawns: number;
   lastCheckpointFlash: number;
   hazardHitFlash: number;
+  infiniteStats: InfiniteHudStats | null;
 }
 
 export const CHASSIS_SPECS: Record<ChassisId, ChassisSpec> = {

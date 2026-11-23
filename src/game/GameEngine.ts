@@ -4,9 +4,11 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { AudioSynth } from './AudioSynth';
+import { InfiniteTrackManager } from './InfiniteTrackManager';
 import { LEVELS } from './levels';
 import { buildTrack, BuiltTrack } from './TrackBuilder';
 import {
+  CrashEvent,
   GarageConfig,
   GhostFrame,
   GhostRun,
@@ -16,6 +18,7 @@ import {
   InputState,
   LevelDefinition,
   ScreenMode,
+  TrackQueryTarget,
 } from './types';
 import {
   createGhostVehicleMesh,
@@ -53,6 +56,22 @@ export interface EngineCallbacks {
     coinsCollected: number,
     airborneSec: number,
     ghostRun: GhostRun,
+  ) => void;
+  onInfiniteComplete: (
+    distanceM: number,
+    sector: number,
+    coinsCollected: number,
+    airborneSec: number,
+  ) => void;
+  onCrashGameOver: (
+    crash: CrashEvent,
+    coinsCollected: number,
+    elapsedSec: number,
+    infiniteResult: {
+      distanceM: number;
+      sector: number;
+      airborneSec: number;
+    } | null,
   ) => void;
   onPauseToggle: () => void;
   onContextLost: (lost: boolean) => void;
@@ -198,6 +217,20 @@ export class GameEngine {
   private currentGarage: GarageConfig;
   private currentTrack: BuiltTrack | null = null;
   private currentLevel: LevelDefinition = LEVELS[0];
+
+  // Infinite Mode streaming state
+  private infiniteManager: InfiniteTrackManager | null = null;
+  private infiniteMode = false;
+  private infiniteBestDistanceM = 0;
+  private infiniteShields = 3;
+  private readonly infiniteMaxShields = 3;
+  private infiniteSector = 1;
+  private infiniteDistanceM = 0;
+  private infiniteRoadLabel = 'Neon Highway';
+  private infiniteGroundLabel = 'Cyber Grid';
+  private infiniteAccentColor = '#00f3ff';
+  private infiniteSecondaryColor = '#ff007f';
+  private lastSectorFlash = 0;
 
   // Ghost recording & replay
   private ghostEnabled: boolean;
@@ -638,14 +671,76 @@ export class GameEngine {
     this.emitHud();
   }
 
+  public startInfiniteMode(bestDistanceM: number): void {
+    if (this.currentTrack) {
+      this.scene.remove(this.currentTrack.group);
+      this.currentTrack.dispose();
+      this.currentTrack = null;
+    }
+    if (this.infiniteManager) {
+      this.scene.remove(this.infiniteManager.group);
+      this.infiniteManager.dispose();
+      this.infiniteManager = null;
+    }
+    this.setupGhostVisuals(null);
+
+    this.infiniteMode = true;
+    this.infiniteBestDistanceM = bestDistanceM;
+    this.infiniteShields = this.infiniteMaxShields;
+    this.infiniteSector = 1;
+    this.infiniteDistanceM = 0;
+    this.lastSectorFlash = 0;
+
+    const maxAniso = Math.min(
+      this.isCompactMobile ? 4 : 8,
+      this.renderer.capabilities.getMaxAnisotropy(),
+    );
+    this.infiniteManager = new InfiniteTrackManager(maxAniso);
+    this.scene.add(this.infiniteManager.group);
+
+    const biome = this.infiniteManager.getActiveBiome();
+    this.infiniteRoadLabel = biome.roadLabel;
+    this.infiniteGroundLabel = biome.groundLabel;
+    this.infiniteAccentColor = biome.accentColor;
+    this.infiniteSecondaryColor = biome.secondaryColor;
+    this.applyBiomeAtmosphere(biome.groundTheme);
+
+    this.vehicle.resetToSpawn(this.infiniteManager.getSpawnPoint());
+    this.runElapsedSec = 0;
+    this.recordedFrames = [];
+    this.mode = 'playing';
+    this.audio.startMusic();
+    this.emitHud();
+  }
+
+  public endInfiniteRun(): void {
+    if (!this.infiniteMode) return;
+    this.mode = 'victory';
+    this.clearInputs();
+    this.audio.updateEngine(0, false, false);
+    this.audio.playVictory();
+    this.emitHud();
+    this.callbacks.onInfiniteComplete(
+      this.infiniteDistanceM,
+      this.infiniteSector,
+      this.vehicle.coinsCollected,
+      this.vehicle.airborneSec,
+    );
+  }
+
   public restartLevel(): void {
+    if (this.infiniteMode) {
+      this.startInfiniteMode(Math.max(this.infiniteBestDistanceM, this.infiniteDistanceM));
+      return;
+    }
     if (!this.currentTrack) return;
     for (const cp of this.currentTrack.checkpoints) {
       cp.activated = false;
       cp.updateVisuals(false);
     }
     this.currentTrack.resetCoins();
-    this.vehicle.resetToTrack(this.currentTrack);
+    this.currentTrack.resetRings();
+    this.vehicle.resetToSpawn(this.currentTrack.spawnPoint);
     this.runElapsedSec = 0;
     this.recordedFrames = [];
     this.ghostSampleAccum = 0;
@@ -657,8 +752,17 @@ export class GameEngine {
 
   public respawnAtCheckpoint(): void {
     if (this.mode !== 'playing') return;
+    if (this.infiniteMode) {
+      this.infiniteShields = Math.max(0, this.infiniteShields - 1);
+      if (this.infiniteShields <= 0) {
+        this.audio.playImpact();
+        this.endInfiniteRun();
+        return;
+      }
+    }
     this.vehicle.respawn(true);
     this.audio.playImpact();
+    this.emitHud();
   }
 
   private setupGhostVisuals(ghostRun: GhostRun | null): void {
@@ -733,7 +837,23 @@ export class GameEngine {
     this.ghostVisuals.root.visible = true;
   }
 
+  private applyBiomeAtmosphere(groundTheme: GroundTheme): void {
+    const themeColors = getAbyssThemeColors(groundTheme);
+    drawAbyssGridCanvas(this.abyssGridCanvas, groundTheme);
+    this.abyssGridTex.needsUpdate = true;
+    (this.scene.background as THREE.Color).set(themeColors.bg);
+    (this.scene.fog as THREE.FogExp2).color.set(themeColors.bg);
+    this.sunMat.color.setHex(themeColors.sunHex);
+  }
+
   private loadLevel(level: LevelDefinition, bestGhost: GhostRun | null): void {
+    this.infiniteMode = false;
+    if (this.infiniteManager) {
+      this.scene.remove(this.infiniteManager.group);
+      this.infiniteManager.dispose();
+      this.infiniteManager = null;
+    }
+
     this.currentLevel = level;
     if (this.currentTrack) {
       this.scene.remove(this.currentTrack.group);
@@ -742,17 +862,12 @@ export class GameEngine {
     }
 
     // Update abyss ground & sky atmosphere for this level's ground theme
-    const themeColors = getAbyssThemeColors(level.groundTheme);
-    drawAbyssGridCanvas(this.abyssGridCanvas, level.groundTheme);
-    this.abyssGridTex.needsUpdate = true;
-    (this.scene.background as THREE.Color).set(themeColors.bg);
-    (this.scene.fog as THREE.FogExp2).color.set(themeColors.bg);
-    this.sunMat.color.setHex(themeColors.sunHex);
+    this.applyBiomeAtmosphere(level.groundTheme);
 
     const maxAniso = Math.min(this.isCompactMobile ? 4 : 8, this.renderer.capabilities.getMaxAnisotropy());
     this.currentTrack = buildTrack(level, maxAniso);
     this.scene.add(this.currentTrack.group);
-    this.vehicle.resetToTrack(this.currentTrack);
+    this.vehicle.resetToSpawn(this.currentTrack.spawnPoint);
     this.setupGhostVisuals(bestGhost);
   }
 
@@ -826,11 +941,25 @@ export class GameEngine {
       drifting: this.vehicle.drifting,
       boosting: this.vehicle.boosting,
       ghostActive:
+        !this.infiniteMode &&
         this.ghostEnabled &&
         Boolean(this.activeGhostRun && this.activeGhostRun.frames.length >= 2),
       respawns: this.vehicle.respawns,
       lastCheckpointFlash: this.vehicle.lastCheckpointFlash,
       hazardHitFlash: this.vehicle.hazardHitFlash,
+      infiniteStats: this.infiniteMode
+        ? {
+            distanceM: this.infiniteDistanceM,
+            bestDistanceM: Math.max(this.infiniteBestDistanceM, this.infiniteDistanceM),
+            sector: this.infiniteSector,
+            roadLabel: this.infiniteRoadLabel,
+            groundLabel: this.infiniteGroundLabel,
+            shields: this.infiniteShields,
+            maxShields: this.infiniteMaxShields,
+            lastRingFlash: this.vehicle.lastRingFlash,
+            lastSectorFlash: this.lastSectorFlash,
+          }
+        : null,
     });
   }
 
@@ -879,29 +1008,125 @@ export class GameEngine {
       }
     }
 
-    if (this.currentTrack) {
+    if (this.infiniteMode && this.infiniteManager) {
+      this.infiniteManager.update(elapsed);
+    } else if (this.currentTrack) {
       this.currentTrack.update(elapsed);
     }
 
-    if (this.mode === 'playing' && this.currentTrack) {
+    const activeTrack: TrackQueryTarget | null = this.infiniteMode
+      ? this.infiniteManager
+      : this.currentTrack;
+
+    if (this.mode === 'playing' && activeTrack) {
       this.runElapsedSec += dt;
-      const { finished } = this.vehicle.step(dt, this.input, this.currentTrack, this.audio);
+      const { finished, fellIntoAbyss, fatalCrash } = this.vehicle.step(
+        dt,
+        this.input,
+        activeTrack,
+        this.audio,
+      );
 
-      // Ghost sample recording & replay
-      this.ghostSampleAccum += dt;
-      if (this.ghostSampleAccum >= 0.085) {
-        this.ghostSampleAccum = 0;
-        this.recordGhostFrame(this.runElapsedSec);
+      if (fatalCrash) {
+        // Spawn dramatic explosion sparks at vehicle impact site
+        for (let k = 0; k < 36; k++) {
+          const ang = (k / 36) * Math.PI * 2 + Math.random() * 0.2;
+          const spd = 12 + Math.random() * 24;
+          const color = k % 3 === 0 ? '#ff0055' : k % 3 === 1 ? '#ffaa00' : '#ffffff';
+          this.spawnParticle(
+            this.vehicle.position.x + (Math.random() - 0.5) * 1.4,
+            this.vehicle.position.y + 0.8 + Math.random() * 0.8,
+            this.vehicle.position.z + (Math.random() - 0.5) * 1.4,
+            Math.cos(ang) * spd,
+            6 + Math.random() * 14,
+            Math.sin(ang) * spd,
+            0.55 + Math.random() * 0.35,
+            1.6,
+            color,
+          );
+        }
+        if (this.ghostVisuals) {
+          this.ghostVisuals.root.visible = false;
+        }
+        this.mode = 'victory';
+        this.clearInputs();
+        this.audio.updateEngine(0, false, false);
+        this.emitHud();
+        this.callbacks.onCrashGameOver(
+          fatalCrash,
+          this.vehicle.coinsCollected,
+          this.runElapsedSec,
+          this.infiniteMode
+            ? {
+                distanceM: this.infiniteDistanceM,
+                sector: this.infiniteSector,
+                airborneSec: this.vehicle.airborneSec,
+              }
+            : null,
+        );
+      } else if (fellIntoAbyss) {
+        if (this.infiniteMode) {
+          this.infiniteShields = Math.max(0, this.infiniteShields - 1);
+          this.audio.playImpact();
+          if (this.infiniteShields > 0) {
+            this.vehicle.respawn(true);
+            this.emitHud();
+          } else {
+            this.endInfiniteRun();
+          }
+        } else {
+          this.vehicle.respawn(true);
+          this.audio.playImpact();
+        }
       }
-      this.updateGhostPlayback(this.runElapsedSec);
 
-      // Engine sound tied to speed
-      this.audio.updateEngine(this.vehicle.getSpeed() / 70, this.vehicle.boosting, true);
+      if (this.mode === 'playing' && this.infiniteMode && this.infiniteManager) {
+        const stream = this.infiniteManager.ensureChunksAround(this.vehicle.position);
+        this.infiniteDistanceM = stream.distanceM;
+        if (stream.sectorChanged && stream.activeSector > this.infiniteSector) {
+          this.infiniteSector = stream.activeSector;
+          this.lastSectorFlash = performance.now();
+          // Restore +1 shield every 2 sectors cleared
+          if (
+            this.infiniteSector % 2 === 1 &&
+            this.infiniteShields < this.infiniteMaxShields
+          ) {
+            this.infiniteShields += 1;
+          }
+          this.infiniteRoadLabel = stream.activeBiome.roadLabel;
+          this.infiniteGroundLabel = stream.activeBiome.groundLabel;
+          this.infiniteAccentColor = stream.activeBiome.accentColor;
+          this.infiniteSecondaryColor = stream.activeBiome.secondaryColor;
+          this.applyBiomeAtmosphere(stream.activeBiome.groundTheme);
+        }
+      }
+
+      // Ghost sample recording & replay (fixed circuits)
+      if (this.mode === 'playing' && !this.infiniteMode) {
+        this.ghostSampleAccum += dt;
+        if (this.ghostSampleAccum >= 0.085) {
+          this.ghostSampleAccum = 0;
+          this.recordGhostFrame(this.runElapsedSec);
+        }
+        this.updateGhostPlayback(this.runElapsedSec);
+      }
+
+      // Engine sound tied to speed (remains silent if run just ended on crash)
+      if (this.mode === 'playing') {
+        this.audio.updateEngine(this.vehicle.getSpeed() / 70, this.vehicle.boosting, true);
+      }
 
       // Spawn exhaust / speed-line particles when boosting or drifting
       _carFwd.set(0, 0, -1).applyQuaternion(this.vehicle.quaternion);
       _carUp.set(0, 1, 0).applyQuaternion(this.vehicle.quaternion);
       _carRight.set(1, 0, 0).applyQuaternion(this.vehicle.quaternion);
+
+      const activeAccent = this.infiniteMode
+        ? this.infiniteAccentColor
+        : this.currentLevel.accentColor;
+      const activeSecondary = this.infiniteMode
+        ? this.infiniteSecondaryColor
+        : this.currentLevel.secondaryColor;
 
       const emitBoostLines = this.qualityMode !== 'eco';
       if (this.vehicle.boosting) {
@@ -919,7 +1144,7 @@ export class GameEngine {
             -_carFwd.z * 28,
             0.28,
             3.6,
-            this.currentLevel.accentColor,
+            activeAccent,
           );
         }
         if (emitBoostLines) {
@@ -958,7 +1183,7 @@ export class GameEngine {
           -_carFwd.z * 8,
           0.22,
           1.4,
-          this.currentLevel.secondaryColor,
+          activeSecondary,
         );
       }
 
@@ -1007,7 +1232,7 @@ export class GameEngine {
         this.emitHud();
       }
 
-      if (finished) {
+      if (finished && !this.infiniteMode) {
         this.recordGhostFrame(this.runElapsedSec);
         if (this.ghostVisuals) {
           this.ghostVisuals.root.visible = false;
@@ -1103,6 +1328,9 @@ export class GameEngine {
     this.audio.dispose();
     if (this.currentTrack) {
       this.currentTrack.dispose();
+    }
+    if (this.infiniteManager) {
+      this.infiniteManager.dispose();
     }
     if (this.ghostVisuals) {
       this.ghostVisuals.dispose();

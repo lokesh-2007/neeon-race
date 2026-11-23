@@ -57,6 +57,14 @@ export const MISSION_CATALOG: Record<string, DailyMissionDefinition> = {
     target: 1,
     rewardCoins: 250,
   },
+  infinite_2000m: {
+    id: 'infinite_2000m',
+    title: 'Endless Voyager',
+    description: 'Drive 2,000m in a single Infinite Mode run',
+    metric: 'infinite_distance_m',
+    target: 2000,
+    rewardCoins: 240,
+  },
 };
 
 const ROTATING_IDS = [
@@ -65,6 +73,7 @@ const ROTATING_IDS = [
   'collect_100_today',
   'glider_8_sec',
   'mega_circuit',
+  'infinite_2000m',
 ];
 
 export function getTodayDateKey(): string {

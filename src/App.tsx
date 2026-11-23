@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Coins,
+  Flag,
   Ghost,
+  Infinity as InfinityIcon,
   Map,
   Play,
   RotateCcw,
@@ -13,12 +15,13 @@ import { DailyMissionsPanel } from './components/DailyMissionsPanel';
 import { GarageDock } from './components/GarageDock';
 import { LevelSelectModal } from './components/LevelSelectModal';
 import { RacingHud } from './components/RacingHud';
-import { VictoryModal } from './components/VictoryModal';
+import { CrashSummary, InfiniteRunSummary, VictoryModal } from './components/VictoryModal';
 import { GameEngine } from './game/GameEngine';
 import { LEVELS } from './game/levels';
 import {
   claimDailyMissionReward,
   loadProgress,
+  recordInfiniteCompletion,
   recordLevelCompletion,
   saveGarageConfig,
   saveGhostEnabled,
@@ -53,6 +56,7 @@ const INITIAL_HUD: HudTelemetry = {
   respawns: 0,
   lastCheckpointFlash: 0,
   hazardHitFlash: 0,
+  infiniteStats: null,
 };
 
 export default function App() {
@@ -62,6 +66,7 @@ export default function App() {
   const [saveData, setSaveData] = useState<SavedProgress>(() => loadProgress());
   const [screen, setScreen] = useState<ScreenMode>('title');
   const [activeLevel, setActiveLevel] = useState<LevelDefinition>(LEVELS[0]);
+  const [activeMode, setActiveMode] = useState<'level' | 'infinite'>('level');
   const [hud, setHud] = useState<HudTelemetry>(INITIAL_HUD);
   const [contextLost, setContextLost] = useState(false);
 
@@ -72,6 +77,8 @@ export default function App() {
     medal: 'gold' | 'silver' | 'bronze';
     isNewBest: boolean;
     newlyCompletedMissions: DailyMissionDefinition[];
+    infiniteSummary: InfiniteRunSummary | null;
+    crashSummary: CrashSummary | null;
   } | null>(null);
 
   const activeLevelRef = useRef<LevelDefinition>(activeLevel);
@@ -79,6 +86,9 @@ export default function App() {
 
   const screenRef = useRef<ScreenMode>(screen);
   screenRef.current = screen;
+
+  const hudRef = useRef<HudTelemetry>(hud);
+  hudRef.current = hud;
 
   useEffect(() => {
     const container = mountRef.current;
@@ -115,7 +125,84 @@ export default function App() {
             medal: res.medal,
             isNewBest: res.isNewBest,
             newlyCompletedMissions: res.newlyCompletedMissions,
+            infiniteSummary: null,
+            crashSummary: null,
           });
+          setScreen('victory');
+        },
+        onInfiniteComplete: (distanceM, sector, coinsCollected, airborneSec) => {
+          const res = recordInfiniteCompletion(distanceM, sector, coinsCollected, airborneSec);
+          setSaveData(res.progress);
+          setVictoryInfo({
+            timeMs: 0,
+            respawns: 0,
+            coinsCollected,
+            medal: 'gold',
+            isNewBest: res.isNewBestDistance,
+            newlyCompletedMissions: res.newlyCompletedMissions,
+            infiniteSummary: {
+              distanceM,
+              bestDistanceM: res.progress.bestInfiniteDistanceM,
+              sector,
+              coinsCollected,
+              isNewBestDistance: res.isNewBestDistance,
+            },
+            crashSummary: null,
+          });
+          setScreen('victory');
+        },
+        onCrashGameOver: (crash, coinsCollected, elapsedSec, infiniteResult) => {
+          if (infiniteResult) {
+            const res = recordInfiniteCompletion(
+              infiniteResult.distanceM,
+              infiniteResult.sector,
+              coinsCollected,
+              infiniteResult.airborneSec,
+            );
+            setSaveData(res.progress);
+            setVictoryInfo({
+              timeMs: 0,
+              respawns: 0,
+              coinsCollected,
+              medal: 'bronze',
+              isNewBest: res.isNewBestDistance,
+              newlyCompletedMissions: res.newlyCompletedMissions,
+              infiniteSummary: null,
+              crashSummary: {
+                trapType: crash.trapType,
+                speedKmh: crash.speedKmh,
+                elapsedSec,
+                coinsCollected,
+                checkpointIndex: hudRef.current.checkpointIndex,
+                totalCheckpoints: hudRef.current.totalCheckpoints,
+                infiniteResult: {
+                  distanceM: infiniteResult.distanceM,
+                  bestDistanceM: res.progress.bestInfiniteDistanceM,
+                  sector: infiniteResult.sector,
+                  isNewBestDistance: res.isNewBestDistance,
+                },
+              },
+            });
+          } else {
+            setVictoryInfo({
+              timeMs: 0,
+              respawns: hudRef.current.respawns,
+              coinsCollected,
+              medal: 'bronze',
+              isNewBest: false,
+              newlyCompletedMissions: [],
+              infiniteSummary: null,
+              crashSummary: {
+                trapType: crash.trapType,
+                speedKmh: crash.speedKmh,
+                elapsedSec,
+                coinsCollected,
+                checkpointIndex: hudRef.current.checkpointIndex,
+                totalCheckpoints: hudRef.current.totalCheckpoints,
+                infiniteResult: null,
+              },
+            });
+          }
           setScreen('victory');
         },
         onPauseToggle: () => {
@@ -186,10 +273,20 @@ export default function App() {
     engineRef.current?.audio.unlock();
     const latest = loadProgress();
     const bestGhost = latest.ghostRuns[level.id] ?? null;
+    setActiveMode('level');
     setActiveLevel(level);
     setVictoryInfo(null);
     setScreen('playing');
     engineRef.current?.startLevel(level, bestGhost);
+  }, []);
+
+  const handleStartInfinite = useCallback(() => {
+    engineRef.current?.audio.unlock();
+    const latest = loadProgress();
+    setActiveMode('infinite');
+    setVictoryInfo(null);
+    setScreen('playing');
+    engineRef.current?.startInfiniteMode(latest.bestInfiniteDistanceM);
   }, []);
 
   const handleOpenScreen = useCallback((next: ScreenMode) => {
@@ -291,6 +388,15 @@ export default function App() {
 
               <button
                 type="button"
+                onClick={handleStartInfinite}
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-fuchsia-400/55 bg-fuchsia-500/15 px-3.5 sm:px-4 py-3 text-sm font-semibold text-fuchsia-200 transition-colors hover:border-fuchsia-300 hover:bg-fuchsia-500/25 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <InfinityIcon className="h-4 w-4 text-fuchsia-300" />
+                <span>Infinite</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleOpenScreen('levels')}
                 className="flex items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3.5 sm:px-4 py-3 text-sm font-semibold text-white transition-colors hover:border-cyan-400/60 whitespace-nowrap shrink-0 cursor-pointer"
               >
@@ -319,7 +425,10 @@ export default function App() {
       {screen === 'levels' && (
         <LevelSelectModal
           bestTimes={saveData.bestTimes}
+          bestInfiniteDistanceM={saveData.bestInfiniteDistanceM}
+          bestInfiniteSector={saveData.bestInfiniteSector}
           onSelectLevel={handleStartLevel}
+          onStartInfinite={handleStartInfinite}
           onBack={() => handleOpenScreen('title')}
         />
       )}
@@ -360,7 +469,9 @@ export default function App() {
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#050508]/82 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-[#090c17] p-6">
             <div className="text-xs text-slate-400">
-              Level {activeLevel.number} · {activeLevel.name}
+              {activeMode === 'infinite'
+                ? `Infinite Mode · Sector ${hud.infiniteStats?.sector ?? 1} · ${(hud.infiniteStats?.distanceM ?? 0).toLocaleString()} m`
+                : `Level ${activeLevel.number} · ${activeLevel.name}`}
             </div>
             <h2 className="mt-1 font-display text-2xl font-bold text-white">
               Race Paused
@@ -387,23 +498,25 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex items-center justify-between border-t border-white/10 pt-2.5 text-xs">
-                <span className="flex items-center gap-1.5 font-medium text-slate-300">
-                  <Ghost className="h-3.5 w-3.5 text-cyan-300" />
-                  Best Run Ghost
-                </span>
-                <button
-                  type="button"
-                  onClick={handleToggleGhost}
-                  className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors cursor-pointer ${
-                    saveData.ghostEnabled
-                      ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200'
-                      : 'border-white/15 bg-white/5 text-slate-400'
-                  }`}
-                >
-                  {saveData.ghostEnabled ? 'Enabled' : 'Disabled'}
-                </button>
-              </div>
+              {activeMode === 'level' && (
+                <div className="flex items-center justify-between border-t border-white/10 pt-2.5 text-xs">
+                  <span className="flex items-center gap-1.5 font-medium text-slate-300">
+                    <Ghost className="h-3.5 w-3.5 text-cyan-300" />
+                    Best Run Ghost
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleToggleGhost}
+                    className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors cursor-pointer ${
+                      saveData.ghostEnabled
+                        ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200'
+                        : 'border-white/15 bg-white/5 text-slate-400'
+                    }`}
+                  >
+                    {saveData.ghostEnabled ? 'Enabled' : 'Disabled'}
+                  </button>
+                </div>
+              )}
 
               <div className="flex items-center justify-between border-t border-white/10 pt-2.5 text-xs">
                 <span className="font-medium text-slate-300">Graphics</span>
@@ -436,6 +549,17 @@ export default function App() {
                 <span>Resume Race</span>
               </button>
 
+              {activeMode === 'infinite' && (
+                <button
+                  type="button"
+                  onClick={() => engineRef.current?.endInfiniteRun()}
+                  className="flex items-center justify-center gap-2 rounded-xl border border-amber-400/50 bg-amber-500/15 px-4 py-3 text-sm font-semibold text-amber-200 transition-colors hover:border-amber-300 cursor-pointer"
+                >
+                  <Flag className="h-4 w-4" />
+                  <span>Finish & Bank Run</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -445,7 +569,7 @@ export default function App() {
                 className="flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition-colors hover:border-cyan-400/50 cursor-pointer"
               >
                 <RotateCcw className="h-4 w-4" />
-                <span>Restart Level</span>
+                <span>{activeMode === 'infinite' ? 'Restart Infinite' : 'Restart Level'}</span>
               </button>
 
               <button
@@ -480,8 +604,14 @@ export default function App() {
           isNewBest={victoryInfo.isNewBest}
           newlyCompletedMissions={victoryInfo.newlyCompletedMissions}
           hasNextLevel={hasNextLevel}
+          infiniteSummary={victoryInfo.infiniteSummary}
+          crashSummary={victoryInfo.crashSummary}
           onNextLevel={() => handleStartLevel(LEVELS[activeLevelIdx + 1])}
-          onRetry={() => handleStartLevel(activeLevel)}
+          onRetry={() =>
+            victoryInfo.infiniteSummary || victoryInfo.crashSummary?.infiniteResult
+              ? handleStartInfinite()
+              : handleStartLevel(activeLevel)
+          }
           onLevelSelect={() => handleOpenScreen('levels')}
         />
       )}

@@ -330,6 +330,46 @@ export class AudioSynth {
     });
   }
 
+  public playRing(): void {
+    this.unlock();
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const notes = [587.33, 880, 1174.66, 1567.98];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx || !this.masterGain) return;
+      const t = now + idx * 0.04;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(0.16, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.26);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(t);
+      osc.stop(t + 0.28);
+    });
+  }
+
+  public playJumpPad(): void {
+    this.unlock();
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(140, now);
+    osc.frequency.exponentialRampToValueAtTime(760, now + 0.26);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.16, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  }
+
   public playImpact(): void {
     this.unlock();
     if (!this.ctx || !this.masterGain || this.muted) return;
@@ -345,6 +385,45 @@ export class AudioSynth {
     gain.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + 0.25);
+  }
+
+  public playCrashExplosion(): void {
+    this.unlock();
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+
+    // Sub-bass crunch drop
+    const osc = this.ctx.createOscillator();
+    const oGain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(140, now);
+    osc.frequency.exponentialRampToValueAtTime(26, now + 0.55);
+    oGain.gain.setValueAtTime(0.32, now);
+    oGain.gain.exponentialRampToValueAtTime(0.001, now + 0.58);
+    osc.connect(oGain);
+    oGain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.6);
+
+    // Debris noise burst
+    if (this.noiseBuffer) {
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = this.noiseBuffer;
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(2800, now);
+      lp.frequency.exponentialRampToValueAtTime(160, now + 0.52);
+
+      const nGain = this.ctx.createGain();
+      nGain.gain.setValueAtTime(0.36, now);
+      nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.54);
+
+      noise.connect(lp);
+      lp.connect(nGain);
+      nGain.connect(this.masterGain);
+      noise.start(now);
+      noise.stop(now + 0.56);
+    }
   }
 
   public playVictory(): void {

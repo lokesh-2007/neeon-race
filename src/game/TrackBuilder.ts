@@ -5,12 +5,29 @@ import {
   CoinItem,
   ColliderQuad,
   GroundTheme,
+  JumpPadZone,
   LevelDefinition,
   MovingObstacle,
+  SceneryStyle,
+  SpeedRingItem,
+  TrackQueryTarget,
 } from './types';
 
 const _coinBob = new THREE.Vector3();
 const _coinDummy = new THREE.Object3D();
+
+export interface TrackStartPose {
+  position: THREE.Vector3;
+  forward: THREE.Vector3;
+  up: THREE.Vector3;
+  right: THREE.Vector3;
+}
+
+export interface BuildTrackOptions {
+  startPose?: TrackStartPose;
+  includeFinishGate?: boolean;
+  startCheckpointIndex?: number;
+}
 
 interface FrameSample {
   pos: THREE.Vector3;
@@ -19,27 +36,29 @@ interface FrameSample {
   right: THREE.Vector3;
   width: number;
   isLoop: boolean;
+  splitGap?: number;
+  wallHeight?: number;
 }
 
-export interface BuiltTrack {
+export interface BuiltTrack extends TrackQueryTarget {
   group: THREE.Group;
   colliderHash: SpatialQuadHash;
   boostZones: BoostZone[];
+  jumpPads: JumpPadZone[];
   checkpoints: CheckpointGate[];
   coins: CoinItem[];
+  rings: SpeedRingItem[];
   markCoinCollected: (index: number) => void;
   resetCoins: () => void;
-  finishGate: {
-    position: THREE.Vector3;
-    forward: THREE.Vector3;
-    width: number;
-  };
+  markRingCollected: (index: number) => void;
+  resetRings: () => void;
   obstacles: MovingObstacle[];
   spawnPoint: {
     position: THREE.Vector3;
     forward: THREE.Vector3;
     up: THREE.Vector3;
   };
+  endPose: TrackStartPose;
   gripMultiplier: number;
   update: (elapsed: number) => void;
   dispose: () => void;
@@ -328,12 +347,19 @@ function distToSegmentSq(
   return p.distanceToSquared(closestOut);
 }
 
-export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrack {
+export function buildTrack(
+  level: LevelDefinition,
+  maxAnisotropy = 4,
+  options: BuildTrackOptions = {},
+): BuiltTrack {
   const group = new THREE.Group();
   const colliderHash = new SpatialQuadHash();
   const boostZones: BoostZone[] = [];
+  const jumpPads: JumpPadZone[] = [];
   const checkpoints: CheckpointGate[] = [];
   const coins: CoinItem[] = [];
+  const rings: SpeedRingItem[] = [];
+  const ringMeshes: THREE.Mesh[] = [];
   const obstacles: MovingObstacle[] = [];
 
   const disposables: { dispose: () => void }[] = [];
@@ -384,6 +410,20 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
+  const jumpPadMat = new THREE.MeshStandardMaterial({
+    color: 0x39ff14,
+    emissive: 0x39ff14,
+    emissiveIntensity: 2.8,
+    roughness: 0.2,
+    metalness: 0.4,
+  });
+  const ringMat = new THREE.MeshStandardMaterial({
+    color: 0x00f3ff,
+    emissive: 0x00f3ff,
+    emissiveIntensity: 3.1,
+    roughness: 0.15,
+    metalness: 0.6,
+  });
   const coinGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.24, 14);
   coinGeo.rotateX(Math.PI / 2);
   const coinMat = new THREE.MeshStandardMaterial({
@@ -394,7 +434,7 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     roughness: 0.2,
   });
 
-  // Shared materials for checkpoints & obstacles (cuts shader/material bloat)
+  // Shared materials for checkpoints, obstacles & scenery (cuts shader/material bloat)
   const cpFrameMat = new THREE.MeshStandardMaterial({
     color: 0x111827,
     metalness: 0.85,
@@ -429,6 +469,21 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     emissiveIntensity: 3.1,
     roughness: 0.15,
   });
+  const obsSpikeGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xff4500,
+    emissive: 0xff2a00,
+    emissiveIntensity: 3.2,
+    roughness: 0.18,
+  });
+  const obsSawGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xff00aa,
+    emissive: 0xff00aa,
+    emissiveIntensity: 3.3,
+    roughness: 0.15,
+  });
+
+  const ringGeo = new THREE.TorusGeometry(4.1, 0.26, 8, 22);
+  const jumpPadGeo = new THREE.CylinderGeometry(2.5, 2.85, 0.26, 8);
 
   disposables.push(
     deckMaterial,
@@ -436,6 +491,10 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     railPrimaryMat,
     railSecondaryMat,
     boostMat,
+    jumpPadMat,
+    ringMat,
+    ringGeo,
+    jumpPadGeo,
     coinGeo,
     coinMat,
     cpFrameMat,
@@ -444,24 +503,35 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     obsHammerGlowMat,
     obsBarrierGlowMat,
     obsSpinnerGlowMat,
+    obsSpikeGlowMat,
+    obsSawGlowMat,
   );
 
-  // Cursor state: starts at origin facing -Z
-  const curPos = new THREE.Vector3(0, 0, 0);
-  const curForward = new THREE.Vector3(0, 0, -1);
-  const curUp = new THREE.Vector3(0, 1, 0);
-  const curRight = new THREE.Vector3(1, 0, 0);
+  // Cursor state: starts at origin facing -Z or chained from options.startPose
+  const curPos = options.startPose ? options.startPose.position.clone() : new THREE.Vector3(0, 0, 0);
+  const curForward = options.startPose
+    ? options.startPose.forward.clone().normalize()
+    : new THREE.Vector3(0, 0, -1);
+  const curUp = options.startPose
+    ? options.startPose.up.clone().normalize()
+    : new THREE.Vector3(0, 1, 0);
+  const curRight = options.startPose
+    ? options.startPose.right.clone().normalize()
+    : new THREE.Vector3(1, 0, 0);
 
   const spawnPoint = {
-    position: new THREE.Vector3(0, 0.85, -10),
-    forward: new THREE.Vector3(0, 0, -1),
-    up: new THREE.Vector3(0, 1, 0),
+    position: curPos.clone().addScaledVector(curForward, 10).addScaledVector(curUp, 0.85),
+    forward: curForward.clone(),
+    up: curUp.clone(),
   };
 
   // Track sections (contiguous strips separated by jump gaps)
   const sections: FrameSample[][] = [];
   let activeSection: FrameSample[] = [];
   const boostPadTransforms: THREE.Matrix4[] = [];
+  const sceneryArchTransforms: THREE.Matrix4[] = [];
+  const sceneryPylonTransforms: THREE.Matrix4[] = [];
+  const sceneryChevronTransforms: THREE.Matrix4[] = [];
 
   const pushSample = (
     p: THREE.Vector3,
@@ -470,6 +540,8 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     r: THREE.Vector3,
     w: number,
     isLoop: boolean,
+    splitGap = 0,
+    wallHeight = 0,
   ) => {
     activeSection.push({
       pos: p.clone(),
@@ -478,6 +550,8 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       right: r.clone().normalize(),
       width: w,
       isLoop,
+      splitGap,
+      wallHeight,
     });
   };
 
@@ -486,23 +560,83 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     return samples[idx];
   };
 
-  const addBoostPadAt = (sample: FrameSample) => {
-    const padWidth = Math.min(sample.width * 0.52, 6.2);
+  const addBoostPadAt = (sample: FrameSample, lateralRatio = 0) => {
+    const padWidth = Math.min(sample.width * 0.42, 5.8);
     const padLen = 10;
+    const padPos = sample.pos
+      .clone()
+      .addScaledVector(sample.up, 0.05)
+      .addScaledVector(sample.right, sample.width * lateralRatio);
     const basis = new THREE.Matrix4().makeBasis(
       sample.right,
       sample.up,
       sample.forward.clone().negate(),
     );
     basis.scale(new THREE.Vector3(padWidth, 1, padLen));
-    basis.setPosition(sample.pos.clone().addScaledVector(sample.up, 0.05));
+    basis.setPosition(padPos);
     boostPadTransforms.push(basis);
 
     boostZones.push({
-      center: sample.pos.clone().addScaledVector(sample.up, 0.5),
+      center: padPos.clone().addScaledVector(sample.up, 0.45),
       forward: sample.forward.clone(),
       normal: sample.up.clone(),
       radius: Math.max(4.5, padWidth * 0.72),
+    });
+  };
+
+  const addJumpPadAt = (
+    sample: FrameSample,
+    cfg: { laneRatio?: number; impulse?: number },
+  ) => {
+    const padPos = sample.pos
+      .clone()
+      .addScaledVector(sample.up, 0.14)
+      .addScaledVector(sample.right, sample.width * (cfg.laneRatio ?? 0));
+    const basis = new THREE.Matrix4().makeBasis(
+      sample.right,
+      sample.up,
+      sample.forward.clone().negate(),
+    );
+    const mesh = new THREE.Mesh(jumpPadGeo, jumpPadMat);
+    mesh.quaternion.setFromRotationMatrix(basis);
+    mesh.position.copy(padPos);
+    group.add(mesh);
+
+    jumpPads.push({
+      center: padPos.clone().addScaledVector(sample.up, 0.4),
+      forward: sample.forward.clone(),
+      up: sample.up.clone(),
+      radius: 3.4,
+      impulse: cfg.impulse ?? 24,
+    });
+  };
+
+  const addSpeedRingAt = (
+    sample: FrameSample,
+    cfg: { height?: number; laneRatio?: number },
+  ) => {
+    const h = cfg.height ?? 4.6;
+    const ringPos = sample.pos
+      .clone()
+      .addScaledVector(sample.up, h)
+      .addScaledVector(sample.right, sample.width * (cfg.laneRatio ?? 0));
+    const basis = new THREE.Matrix4().makeBasis(
+      sample.right,
+      sample.up,
+      sample.forward.clone().negate(),
+    );
+    const mesh = new THREE.Mesh(ringGeo, ringMat);
+    mesh.quaternion.setFromRotationMatrix(basis);
+    mesh.position.copy(ringPos);
+    group.add(mesh);
+    ringMeshes.push(mesh);
+
+    rings.push({
+      index: rings.length,
+      center: ringPos,
+      forward: sample.forward.clone(),
+      radius: 4.9,
+      collected: false,
     });
   };
 
@@ -919,7 +1053,244 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     });
   };
 
-  let checkpointCounter = 0;
+  const addSpikesObstacleAt = (
+    sample: FrameSample,
+    cfg: { speed?: number; phase?: number },
+  ) => {
+    const stripW = sample.width * 0.84;
+    const speed = cfg.speed ?? 2.3;
+    const phase = cfg.phase ?? 0;
+
+    const basis = new THREE.Matrix4().makeBasis(
+      sample.right,
+      sample.up,
+      sample.forward.clone().negate(),
+    );
+    const container = new THREE.Group();
+    container.quaternion.setFromRotationMatrix(basis);
+    container.position.copy(sample.pos);
+
+    const plateGeo = new THREE.BoxGeometry(stripW, 0.22, 2.4);
+    const spikeGeo = new THREE.ConeGeometry(0.48, 1.55, 4);
+    disposables.push(plateGeo, spikeGeo);
+
+    const plate = new THREE.Mesh(plateGeo, obsHullMat);
+    plate.position.y = 0.08;
+    container.add(plate);
+
+    const spikeGroup = new THREE.Group();
+    const spikeCount = 5;
+    for (let i = 0; i < spikeCount; i++) {
+      const frac = i / (spikeCount - 1) - 0.5;
+      const spike = new THREE.Mesh(spikeGeo, obsSpikeGlowMat);
+      spike.position.set(frac * (stripW - 2.2), 0.78, 0);
+      spikeGroup.add(spike);
+    }
+    container.add(spikeGroup);
+    group.add(container);
+    container.updateMatrixWorld(true);
+
+    const pA = new THREE.Vector3();
+    const pB = new THREE.Vector3();
+    const closest = new THREE.Vector3();
+    let currentExtend = 0;
+
+    obstacles.push({
+      type: 'spikes',
+      update: (elapsed: number) => {
+        // Rhythmic extend/retract cycle
+        const wave = Math.sin(elapsed * speed + phase);
+        currentExtend = Math.max(0, wave);
+        spikeGroup.position.y = -0.75 + currentExtend * 0.95;
+        pA.set(-stripW * 0.48, 0.7, 0).applyMatrix4(container.matrixWorld);
+        pB.set(stripW * 0.48, 0.7, 0).applyMatrix4(container.matrixWorld);
+      },
+      checkCollision: (carPos, carRadius, outPush) => {
+        if (currentExtend < 0.35) return false;
+        const dSq = distToSegmentSq(carPos, pA, pB, closest);
+        const hitR = carRadius + 0.95;
+        if (dSq < hitR * hitR) {
+          outPush.copy(sample.up).multiplyScalar(1.2).addScaledVector(sample.forward, -0.6).normalize();
+          return true;
+        }
+        return false;
+      },
+    });
+  };
+
+  const addCrusherObstacleAt = (
+    sample: FrameSample,
+    cfg: { speed?: number; phase?: number; laneRatio?: number },
+  ) => {
+    const halfW = sample.width * 0.5;
+    const blockW = Math.min(8.5, sample.width * 0.38);
+    const laneX = sample.width * (cfg.laneRatio ?? 0);
+    const speed = cfg.speed ?? 2.1;
+    const phase = cfg.phase ?? 0;
+
+    const basis = new THREE.Matrix4().makeBasis(
+      sample.right,
+      sample.up,
+      sample.forward.clone().negate(),
+    );
+    const container = new THREE.Group();
+    container.quaternion.setFromRotationMatrix(basis);
+    container.position.copy(sample.pos);
+
+    const postGeo = new THREE.BoxGeometry(0.65, 8.2, 0.85);
+    const topGeo = new THREE.BoxGeometry(sample.width + 1.8, 0.65, 1.1);
+    const blockGeo = new THREE.BoxGeometry(blockW, 2.2, 2.4);
+    const trimGeo = new THREE.BoxGeometry(blockW + 0.14, 0.3, 2.48);
+    disposables.push(postGeo, topGeo, blockGeo, trimGeo);
+
+    const leftPost = new THREE.Mesh(postGeo, obsHullMat);
+    leftPost.position.set(-halfW - 0.5, 4.1, 0);
+    const rightPost = new THREE.Mesh(postGeo, obsHullMat);
+    rightPost.position.set(halfW + 0.5, 4.1, 0);
+    const topBar = new THREE.Mesh(topGeo, obsHullMat);
+    topBar.position.set(0, 8.1, 0);
+    container.add(leftPost, rightPost, topBar);
+
+    const hammer = new THREE.Group();
+    hammer.position.set(laneX, 5.0, 0);
+    hammer.add(new THREE.Mesh(blockGeo, obsHullMat));
+    const glow = new THREE.Mesh(trimGeo, obsBarrierGlowMat);
+    glow.position.y = -0.95;
+    hammer.add(glow);
+    container.add(hammer);
+
+    group.add(container);
+    container.updateMatrixWorld(true);
+
+    const pA = new THREE.Vector3();
+    const pB = new THREE.Vector3();
+    const closest = new THREE.Vector3();
+    let curY = 5.0;
+
+    obstacles.push({
+      type: 'crusher',
+      update: (elapsed: number) => {
+        const t = 0.5 + 0.5 * Math.cos(elapsed * speed + phase);
+        curY = THREE.MathUtils.lerp(1.15, 5.4, Math.pow(t, 1.6));
+        hammer.position.y = curY;
+        pA.set(laneX - blockW * 0.45, curY - 0.4, 0).applyMatrix4(container.matrixWorld);
+        pB.set(laneX + blockW * 0.45, curY - 0.4, 0).applyMatrix4(container.matrixWorld);
+      },
+      checkCollision: (carPos, carRadius, outPush) => {
+        if (curY > 2.45) return false;
+        const dSq = distToSegmentSq(carPos, pA, pB, closest);
+        const hitR = carRadius + 1.05;
+        if (dSq < hitR * hitR) {
+          outPush.copy(carPos).sub(closest).normalize();
+          return true;
+        }
+        return false;
+      },
+    });
+  };
+
+  const addSawObstacleAt = (
+    sample: FrameSample,
+    cfg: { speed?: number; phase?: number },
+  ) => {
+    const halfW = sample.width * 0.5;
+    const speed = cfg.speed ?? 2.2;
+    const phase = cfg.phase ?? 0;
+
+    const basis = new THREE.Matrix4().makeBasis(
+      sample.right,
+      sample.up,
+      sample.forward.clone().negate(),
+    );
+    const container = new THREE.Group();
+    container.quaternion.setFromRotationMatrix(basis);
+    container.position.copy(sample.pos);
+
+    const railGeo = new THREE.BoxGeometry(sample.width - 0.8, 0.12, 0.35);
+    const discGeo = new THREE.CylinderGeometry(1.75, 1.75, 0.24, 16);
+    discGeo.rotateZ(Math.PI / 2);
+    const rimGeo = new THREE.TorusGeometry(1.75, 0.14, 8, 20);
+    rimGeo.rotateY(Math.PI / 2);
+    disposables.push(railGeo, discGeo, rimGeo);
+
+    const slot = new THREE.Mesh(railGeo, obsHullMat);
+    slot.position.y = 0.06;
+    container.add(slot);
+
+    const sawGroup = new THREE.Group();
+    sawGroup.position.y = 0.85;
+    sawGroup.add(new THREE.Mesh(discGeo, obsHullMat), new THREE.Mesh(rimGeo, obsSawGlowMat));
+    container.add(sawGroup);
+
+    group.add(container);
+    container.updateMatrixWorld(true);
+
+    const worldPos = new THREE.Vector3();
+
+    obstacles.push({
+      type: 'saw',
+      update: (elapsed: number) => {
+        const x = Math.sin(elapsed * speed + phase) * (halfW - 1.8);
+        sawGroup.position.x = x;
+        sawGroup.rotation.x = elapsed * 10;
+        sawGroup.getWorldPosition(worldPos);
+      },
+      checkCollision: (carPos, carRadius, outPush) => {
+        const hitR = carRadius + 1.45;
+        if (carPos.distanceToSquared(worldPos) < hitR * hitR) {
+          outPush.copy(carPos).sub(worldPos).normalize();
+          return true;
+        }
+        return false;
+      },
+    });
+  };
+
+  const addSceneryForPiece = (
+    samples: FrameSample[],
+    scenery: SceneryStyle,
+  ) => {
+    if (scenery === 'none' || samples.length < 4) return;
+    const stepStride = scenery === 'chevrons' ? 8 : scenery === 'pylons' ? 10 : 12;
+    for (let i = 3; i < samples.length - 3; i += stepStride) {
+      const s = samples[i];
+      const basis = new THREE.Matrix4().makeBasis(
+        s.right,
+        s.up,
+        s.forward.clone().negate(),
+      );
+      if (scenery === 'arches') {
+        const m = basis.clone();
+        m.scale(new THREE.Vector3(s.width + 2.4, 1, 1));
+        m.setPosition(s.pos.clone());
+        sceneryArchTransforms.push(m);
+      } else if (scenery === 'pylons') {
+        for (const side of [-1, 1]) {
+          const m = basis.clone();
+          m.setPosition(
+            s.pos
+              .clone()
+              .addScaledVector(s.right, side * (s.width * 0.5 + 3.2))
+              .addScaledVector(s.up, 3.8),
+          );
+          sceneryPylonTransforms.push(m);
+        }
+      } else if (scenery === 'chevrons') {
+        for (const side of [-1, 1]) {
+          const m = basis.clone();
+          m.setPosition(
+            s.pos
+              .clone()
+              .addScaledVector(s.right, side * (s.width * 0.5 + 1.8))
+              .addScaledVector(s.up, 2.2),
+          );
+          sceneryChevronTransforms.push(m);
+        }
+      }
+    }
+  };
+
+  let checkpointCounter = options.startCheckpointIndex ?? 0;
 
   // Step through level pieces to construct spline frames and attach features
   for (const piece of level.pieces) {
@@ -929,36 +1300,54 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       const steps = Math.max(4, Math.ceil(piece.length / 4));
       const pieceSamples: FrameSample[] = [];
       const elev = piece.elevation ?? 0;
+      const roadStyle = piece.roadStyle ?? 'highway';
+      const isWave = roadStyle === 'wave-deck';
+      const isSplit = roadStyle === 'split-bridge';
+      const wallH = roadStyle === 'canyon-trench' ? 1.65 : 0;
+      const effW = roadStyle === 'narrow-beam' && !piece.width ? Math.min(16, w) : w;
 
       const startPos = curPos.clone();
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
-        const smoothY = elev * (3 * t * t - 2 * t * t * t);
+        const baseY = elev * (3 * t * t - 2 * t * t * t);
+        const waveEnv = Math.sin(Math.PI * t);
+        const waveFreq = Math.PI * 4;
+        const waveY = isWave ? Math.sin(t * waveFreq) * 3.4 * waveEnv : 0;
+
         const p = startPos
           .clone()
           .addScaledVector(curForward, piece.length * t)
-          .addScaledVector(curUp, smoothY);
+          .addScaledVector(curUp, baseY + waveY);
 
-        // Derivative pitch tangent for smooth elevation transition
-        const dyDt = elev * (6 * t - 6 * t * t);
+        // Derivative pitch tangent for smooth elevation + wave transitions
+        const dBaseDt = elev * (6 * t - 6 * t * t);
+        const dWaveDt = isWave
+          ? 3.4 *
+            (waveFreq * Math.cos(t * waveFreq) * waveEnv +
+              Math.sin(t * waveFreq) * Math.PI * Math.cos(Math.PI * t))
+          : 0;
         const tangent = curForward
           .clone()
           .multiplyScalar(piece.length)
-          .addScaledVector(curUp, dyDt)
+          .addScaledVector(curUp, dBaseDt + dWaveDt)
           .normalize();
         const up = curRight.clone().cross(tangent).normalize();
         const right = tangent.clone().cross(up).normalize();
 
+        const splitGap = isSplit && t >= 0.12 && t <= 0.88 ? Math.min(7.2, effW * 0.28) : 0;
+
         if (i > 0 || activeSection.length === 0) {
-          pushSample(p, tangent, up, right, w, false);
+          pushSample(p, tangent, up, right, effW, false, splitGap, wallH);
         }
         pieceSamples.push({
           pos: p.clone(),
           forward: tangent,
           up,
           right,
-          width: w,
+          width: effW,
           isLoop: false,
+          splitGap,
+          wallHeight: wallH,
         });
       }
 
@@ -967,13 +1356,38 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       curUp.copy(pieceSamples[pieceSamples.length - 1].up);
       curRight.copy(pieceSamples[pieceSamples.length - 1].right);
 
+      const resolvedScenery: SceneryStyle =
+        piece.scenery ??
+        (roadStyle === 'hyper-tube'
+          ? 'arches'
+          : roadStyle === 'narrow-beam'
+            ? 'pylons'
+            : 'none');
+      addSceneryForPiece(pieceSamples, resolvedScenery);
+
       if (piece.boostPads) {
         for (const t of piece.boostPads) {
-          addBoostPadAt(sampleAtT(pieceSamples, t));
+          const s = sampleAtT(pieceSamples, t);
+          if (s.splitGap && s.splitGap > 0) {
+            addBoostPadAt(s, -0.28);
+            addBoostPadAt(s, 0.28);
+          } else {
+            addBoostPadAt(s, 0);
+          }
+        }
+      }
+      if (piece.jumpPads) {
+        for (const jp of piece.jumpPads) {
+          addJumpPadAt(sampleAtT(pieceSamples, jp.t), jp);
+        }
+      }
+      if (piece.rings) {
+        for (const rg of piece.rings) {
+          addSpeedRingAt(sampleAtT(pieceSamples, rg.t), rg);
         }
       }
       if (piece.checkpoint) {
-        addCheckpointGateAt(sampleAtT(pieceSamples, 0.25), checkpointCounter++);
+        addCheckpointGateAt(sampleAtT(pieceSamples, 0.22), checkpointCounter++);
       }
       if (piece.lasers) {
         for (const l of piece.lasers) {
@@ -995,20 +1409,42 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
           addSpinnerObstacleAt(sampleAtT(pieceSamples, sp.t), sp);
         }
       }
+      if (piece.spikes) {
+        for (const sk of piece.spikes) {
+          addSpikesObstacleAt(sampleAtT(pieceSamples, sk.t), sk);
+        }
+      }
+      if (piece.crushers) {
+        for (const cr of piece.crushers) {
+          addCrusherObstacleAt(sampleAtT(pieceSamples, cr.t), cr);
+        }
+      }
+      if (piece.saws) {
+        for (const sw of piece.saws) {
+          addSawObstacleAt(sampleAtT(pieceSamples, sw.t), sw);
+        }
+      }
       if (piece.length >= 60) {
         const hasHazard = Boolean(
           (piece.lasers && piece.lasers.length) ||
             (piece.hammers && piece.hammers.length) ||
             (piece.barriers && piece.barriers.length) ||
-            (piece.spinners && piece.spinners.length),
+            (piece.spinners && piece.spinners.length) ||
+            (piece.spikes && piece.spikes.length) ||
+            (piece.crushers && piece.crushers.length) ||
+            (piece.saws && piece.saws.length),
         );
         const straightCoins = Math.min(8, Math.max(4, Math.floor(piece.length / 52)));
+        const laneOffset = isSplit ? 0.28 : 0;
         if (!hasHazard) {
-          addCoinRowAt(pieceSamples, 0.22, 0.8, straightCoins, 0, 0);
+          addCoinRowAt(pieceSamples, 0.22, 0.8, straightCoins, 0, laneOffset);
+          if (isSplit) {
+            addCoinRowAt(pieceSamples, 0.22, 0.8, Math.ceil(straightCoins * 0.5), 0, -laneOffset);
+          }
         } else {
           const halfCoins = Math.max(2, Math.floor(straightCoins * 0.5));
-          addCoinRowAt(pieceSamples, 0.1, 0.24, halfCoins, 0, 0);
-          addCoinRowAt(pieceSamples, 0.78, 0.92, halfCoins, 0, 0);
+          addCoinRowAt(pieceSamples, 0.1, 0.24, halfCoins, 0, laneOffset);
+          addCoinRowAt(pieceSamples, 0.78, 0.92, halfCoins, 0, -laneOffset);
         }
       }
     } else if (piece.type === 'curve') {
@@ -1221,43 +1657,60 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     sections.push(activeSection);
   }
 
-  // Build Finish Gate near end of final section
-  const finalSec = sections[sections.length - 1];
-  const finishSample = finalSec[Math.max(0, finalSec.length - 4)];
-  const finishBasis = new THREE.Matrix4().makeBasis(
-    finishSample.right,
-    finishSample.up,
-    finishSample.forward.clone().negate(),
-  );
-  const finishGroup = new THREE.Group();
-  finishGroup.quaternion.setFromRotationMatrix(finishBasis);
-  finishGroup.position.copy(finishSample.pos);
+  const endPose: TrackStartPose = {
+    position: curPos.clone(),
+    forward: curForward.clone().normalize(),
+    up: curUp.clone().normalize(),
+    right: curRight.clone().normalize(),
+  };
 
-  const fHalfW = finishSample.width * 0.5 + 0.8;
-  const fPillarGeo = new THREE.BoxGeometry(1.1, 10, 1.4);
-  const fBannerGeo = new THREE.BoxGeometry(fHalfW * 2 + 1.4, 2.2, 0.8);
-  const fMat = new THREE.MeshStandardMaterial({
-    color: 0x0f172a,
-    metalness: 0.85,
-    roughness: 0.2,
-  });
-  const fBannerMat = new THREE.MeshStandardMaterial({
-    map: finishTex,
-    emissiveMap: finishTex,
-    emissive: 0x39ff14,
-    emissiveIntensity: 2.2,
-    roughness: 0.3,
-  });
-  disposables.push(fPillarGeo, fBannerGeo, fMat, fBannerMat);
+  // Build Finish Gate near end of final section (omitted on streaming Infinite chunks)
+  const includeFinish = options.includeFinishGate !== false;
+  let finishGate: { position: THREE.Vector3; forward: THREE.Vector3; width: number } | null = null;
+  if (includeFinish) {
+    const finalSec = sections[sections.length - 1];
+    const finishSample = finalSec[Math.max(0, finalSec.length - 4)];
+    const finishBasis = new THREE.Matrix4().makeBasis(
+      finishSample.right,
+      finishSample.up,
+      finishSample.forward.clone().negate(),
+    );
+    const finishGroup = new THREE.Group();
+    finishGroup.quaternion.setFromRotationMatrix(finishBasis);
+    finishGroup.position.copy(finishSample.pos);
 
-  const fLeft = new THREE.Mesh(fPillarGeo, fMat);
-  fLeft.position.set(-fHalfW, 5, 0);
-  const fRight = new THREE.Mesh(fPillarGeo, fMat);
-  fRight.position.set(fHalfW, 5, 0);
-  const fBanner = new THREE.Mesh(fBannerGeo, fBannerMat);
-  fBanner.position.set(0, 9.2, 0);
-  finishGroup.add(fLeft, fRight, fBanner);
-  group.add(finishGroup);
+    const fHalfW = finishSample.width * 0.5 + 0.8;
+    const fPillarGeo = new THREE.BoxGeometry(1.1, 10, 1.4);
+    const fBannerGeo = new THREE.BoxGeometry(fHalfW * 2 + 1.4, 2.2, 0.8);
+    const fMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      metalness: 0.85,
+      roughness: 0.2,
+    });
+    const fBannerMat = new THREE.MeshStandardMaterial({
+      map: finishTex,
+      emissiveMap: finishTex,
+      emissive: 0x39ff14,
+      emissiveIntensity: 2.2,
+      roughness: 0.3,
+    });
+    disposables.push(fPillarGeo, fBannerGeo, fMat, fBannerMat);
+
+    const fLeft = new THREE.Mesh(fPillarGeo, fMat);
+    fLeft.position.set(-fHalfW, 5, 0);
+    const fRight = new THREE.Mesh(fPillarGeo, fMat);
+    fRight.position.set(fHalfW, 5, 0);
+    const fBanner = new THREE.Mesh(fBannerGeo, fBannerMat);
+    fBanner.position.set(0, 9.2, 0);
+    finishGroup.add(fLeft, fRight, fBanner);
+    group.add(finishGroup);
+
+    finishGate = {
+      position: finishSample.pos.clone(),
+      forward: finishSample.forward.clone(),
+      width: finishSample.width,
+    };
+  }
 
   // Build unified BufferGeometries for deck, side hull, neon rails, and instanced support ribs
   const deckPos: number[] = [];
@@ -1281,27 +1734,185 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     arr.push(a, b, c);
   };
 
+  const pushDeckStrip = (
+    lb: THREE.Vector3,
+    rb: THREE.Vector3,
+    rf: THREE.Vector3,
+    lf: THREE.Vector3,
+    up0: THREE.Vector3,
+    up1: THREE.Vector3,
+    right0: THREE.Vector3,
+    right1: THREE.Vector3,
+    fwd0: THREE.Vector3,
+    fwd1: THREE.Vector3,
+    uStart: number,
+    uEnd: number,
+    vStart: number,
+    vEnd: number,
+    isLoop: boolean,
+    wallH0: number,
+    wallH1: number,
+  ) => {
+    const base = vOffsetDeck;
+    deckPos.push(lb.x, lb.y, lb.z, rb.x, rb.y, rb.z, rf.x, rf.y, rf.z, lf.x, lf.y, lf.z);
+    deckNorm.push(
+      up0.x, up0.y, up0.z,
+      up0.x, up0.y, up0.z,
+      up1.x, up1.y, up1.z,
+      up1.x, up1.y, up1.z,
+    );
+    deckUv.push(uStart, vStart, uEnd, vStart, uEnd, vEnd, uStart, vEnd);
+    pushTri(deckIdx, base, base + 1, base + 2);
+    pushTri(deckIdx, base, base + 2, base + 3);
+    vOffsetDeck += 4;
+
+    const lbTop = wallH0 > 0 ? lb.clone().addScaledVector(up0, wallH0) : lb;
+    const rbTop = wallH0 > 0 ? rb.clone().addScaledVector(up0, wallH0) : rb;
+    const lfTop = wallH1 > 0 ? lf.clone().addScaledVector(up1, wallH1) : lf;
+    const rfTop = wallH1 > 0 ? rf.clone().addScaledVector(up1, wallH1) : rf;
+
+    const lbBot = lb.clone().addScaledVector(up0, -deckThickness);
+    const rbBot = rb.clone().addScaledVector(up0, -deckThickness);
+    const rfBot = rf.clone().addScaledVector(up1, -deckThickness);
+    const lfBot = lf.clone().addScaledVector(up1, -deckThickness);
+
+    const hBase = vOffsetHull;
+    // Left wall (extended upward if canyon trench wallH > 0)
+    hullPos.push(
+      lbTop.x, lbTop.y, lbTop.z,
+      lfTop.x, lfTop.y, lfTop.z,
+      lfBot.x, lfBot.y, lfBot.z,
+      lbBot.x, lbBot.y, lbBot.z,
+    );
+    hullNorm.push(
+      -right0.x, -right0.y, -right0.z,
+      -right1.x, -right1.y, -right1.z,
+      -right1.x, -right1.y, -right1.z,
+      -right0.x, -right0.y, -right0.z,
+    );
+    pushTri(hullIdx, hBase, hBase + 2, hBase + 1);
+    pushTri(hullIdx, hBase, hBase + 3, hBase + 2);
+
+    // Right wall
+    hullPos.push(
+      rbTop.x, rbTop.y, rbTop.z,
+      rbBot.x, rbBot.y, rbBot.z,
+      rfBot.x, rfBot.y, rfBot.z,
+      rfTop.x, rfTop.y, rfTop.z,
+    );
+    hullNorm.push(
+      right0.x, right0.y, right0.z,
+      right0.x, right0.y, right0.z,
+      right1.x, right1.y, right1.z,
+      right1.x, right1.y, right1.z,
+    );
+    pushTri(hullIdx, hBase + 4, hBase + 5, hBase + 6);
+    pushTri(hullIdx, hBase + 4, hBase + 6, hBase + 7);
+
+    // Underside
+    hullPos.push(
+      lbBot.x, lbBot.y, lbBot.z,
+      lfBot.x, lfBot.y, lfBot.z,
+      rfBot.x, rfBot.y, rfBot.z,
+      rbBot.x, rbBot.y, rbBot.z,
+    );
+    hullNorm.push(
+      -up0.x, -up0.y, -up0.z,
+      -up1.x, -up1.y, -up1.z,
+      -up1.x, -up1.y, -up1.z,
+      -up0.x, -up0.y, -up0.z,
+    );
+    pushTri(hullIdx, hBase + 8, hBase + 9, hBase + 10);
+    pushTri(hullIdx, hBase + 8, hBase + 10, hBase + 11);
+    vOffsetHull += 12;
+
+    if (wallH0 > 0 || wallH1 > 0) {
+      // Inner faces of trench walls so inside of canyon looks solid
+      const iwBase = vOffsetHull;
+      hullPos.push(
+        lbTop.x, lbTop.y, lbTop.z,
+        lb.x, lb.y, lb.z,
+        lf.x, lf.y, lf.z,
+        lfTop.x, lfTop.y, lfTop.z,
+      );
+      hullNorm.push(
+        right0.x, right0.y, right0.z,
+        right0.x, right0.y, right0.z,
+        right1.x, right1.y, right1.z,
+        right1.x, right1.y, right1.z,
+      );
+      pushTri(hullIdx, iwBase, iwBase + 1, iwBase + 2);
+      pushTri(hullIdx, iwBase, iwBase + 2, iwBase + 3);
+
+      hullPos.push(
+        rbTop.x, rbTop.y, rbTop.z,
+        rfTop.x, rfTop.y, rfTop.z,
+        rf.x, rf.y, rf.z,
+        rb.x, rb.y, rb.z,
+      );
+      hullNorm.push(
+        -right0.x, -right0.y, -right0.z,
+        -right1.x, -right1.y, -right1.z,
+        -right1.x, -right1.y, -right1.z,
+        -right0.x, -right0.y, -right0.z,
+      );
+      pushTri(hullIdx, iwBase + 4, iwBase + 5, iwBase + 6);
+      pushTri(hullIdx, iwBase + 4, iwBase + 6, iwBase + 7);
+      vOffsetHull += 8;
+    }
+
+    const a = lb.clone();
+    const b = rb.clone();
+    const c = rf.clone();
+    const d = lf.clone();
+    const center = new THREE.Vector3().add(a).add(b).add(c).add(d).multiplyScalar(0.25);
+    const normal = new THREE.Vector3().addVectors(up0, up1).normalize();
+    const tangent = new THREE.Vector3().addVectors(fwd0, fwd1).normalize();
+    const right = new THREE.Vector3().addVectors(right0, right1).normalize();
+
+    colliderHash.insert({
+      a,
+      b,
+      c,
+      d,
+      center,
+      normal,
+      tangent,
+      right,
+      isLoop,
+      isBoost: false,
+    });
+  };
+
   const vLB = new THREE.Vector3();
   const vRB = new THREE.Vector3();
   const vLF = new THREE.Vector3();
   const vRF = new THREE.Vector3();
+  const vInLB = new THREE.Vector3();
+  const vInRB = new THREE.Vector3();
+  const vInLF = new THREE.Vector3();
+  const vInRF = new THREE.Vector3();
 
   for (const sec of sections) {
     if (sec.length < 2) continue;
     const leftRail: THREE.Vector3[] = [];
     const rightRail: THREE.Vector3[] = [];
+    let activeInnerLeft: THREE.Vector3[] = [];
+    let activeInnerRight: THREE.Vector3[] = [];
     let runningDist = 0;
 
     for (let i = 0; i < sec.length - 1; i++) {
       const s0 = sec[i];
       const s1 = sec[i + 1];
       const segLen = s0.pos.distanceTo(s1.pos);
-      const u0 = runningDist / 12;
+      const v0 = runningDist / 12;
       runningDist += segLen;
-      const u1 = runningDist / 12;
+      const v1 = runningDist / 12;
 
       const hw0 = s0.width * 0.5;
       const hw1 = s1.width * 0.5;
+      const wh0 = s0.wallHeight ?? 0;
+      const wh1 = s1.wallHeight ?? 0;
 
       vLB.copy(s0.pos).addScaledVector(s0.right, -hw0);
       vRB.copy(s0.pos).addScaledVector(s0.right, hw0);
@@ -1309,109 +1920,56 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       vRF.copy(s1.pos).addScaledVector(s1.right, hw1);
 
       if (i === 0) {
-        leftRail.push(vLB.clone().addScaledVector(s0.up, 0.35));
-        rightRail.push(vRB.clone().addScaledVector(s0.up, 0.35));
+        leftRail.push(vLB.clone().addScaledVector(s0.up, 0.35 + wh0));
+        rightRail.push(vRB.clone().addScaledVector(s0.up, 0.35 + wh0));
       }
-      leftRail.push(vLF.clone().addScaledVector(s1.up, 0.35));
-      rightRail.push(vRF.clone().addScaledVector(s1.up, 0.35));
+      leftRail.push(vLF.clone().addScaledVector(s1.up, 0.35 + wh1));
+      rightRail.push(vRF.clone().addScaledVector(s1.up, 0.35 + wh1));
 
-      // Top deck quad vertices
-      const base = vOffsetDeck;
-      deckPos.push(
-        vLB.x, vLB.y, vLB.z,
-        vRB.x, vRB.y, vRB.z,
-        vRF.x, vRF.y, vRF.z,
-        vLF.x, vLF.y, vLF.z,
-      );
-      deckNorm.push(
-        s0.up.x, s0.up.y, s0.up.z,
-        s0.up.x, s0.up.y, s0.up.z,
-        s1.up.x, s1.up.y, s1.up.z,
-        s1.up.x, s1.up.y, s1.up.z,
-      );
-      deckUv.push(0, u0, 1, u0, 1, u1, 0, u1);
-      pushTri(deckIdx, base, base + 1, base + 2);
-      pushTri(deckIdx, base, base + 2, base + 3);
-      vOffsetDeck += 4;
+      const sg0 = s0.splitGap ?? 0;
+      const sg1 = s1.splitGap ?? 0;
+      const isLoopSeg = s0.isLoop || s1.isLoop;
 
-      // Side skirts & bottom hull
-      const lbBot = vLB.clone().addScaledVector(s0.up, -deckThickness);
-      const rbBot = vRB.clone().addScaledVector(s0.up, -deckThickness);
-      const rfBot = vRF.clone().addScaledVector(s1.up, -deckThickness);
-      const lfBot = vLF.clone().addScaledVector(s1.up, -deckThickness);
+      if (sg0 > 0 && sg1 > 0) {
+        const hg0 = sg0 * 0.5;
+        const hg1 = sg1 * 0.5;
+        vInLB.copy(s0.pos).addScaledVector(s0.right, -hg0);
+        vInRB.copy(s0.pos).addScaledVector(s0.right, hg0);
+        vInLF.copy(s1.pos).addScaledVector(s1.right, -hg1);
+        vInRF.copy(s1.pos).addScaledVector(s1.right, hg1);
 
-      const hBase = vOffsetHull;
-      // Left wall
-      hullPos.push(
-        vLB.x, vLB.y, vLB.z,
-        vLF.x, vLF.y, vLF.z,
-        lfBot.x, lfBot.y, lfBot.z,
-        lbBot.x, lbBot.y, lbBot.z,
-      );
-      hullNorm.push(
-        -s0.right.x, -s0.right.y, -s0.right.z,
-        -s1.right.x, -s1.right.y, -s1.right.z,
-        -s1.right.x, -s1.right.y, -s1.right.z,
-        -s0.right.x, -s0.right.y, -s0.right.z,
-      );
-      pushTri(hullIdx, hBase, hBase + 2, hBase + 1);
-      pushTri(hullIdx, hBase, hBase + 3, hBase + 2);
+        if (activeInnerLeft.length === 0) {
+          activeInnerLeft.push(vInLB.clone().addScaledVector(s0.up, 0.32));
+          activeInnerRight.push(vInRB.clone().addScaledVector(s0.up, 0.32));
+        }
+        activeInnerLeft.push(vInLF.clone().addScaledVector(s1.up, 0.32));
+        activeInnerRight.push(vInRF.clone().addScaledVector(s1.up, 0.32));
 
-      // Right wall
-      hullPos.push(
-        vRB.x, vRB.y, vRB.z,
-        rbBot.x, rbBot.y, rbBot.z,
-        rfBot.x, rfBot.y, rfBot.z,
-        vRF.x, vRF.y, vRF.z,
-      );
-      hullNorm.push(
-        s0.right.x, s0.right.y, s0.right.z,
-        s0.right.x, s0.right.y, s0.right.z,
-        s1.right.x, s1.right.y, s1.right.z,
-        s1.right.x, s1.right.y, s1.right.z,
-      );
-      pushTri(hullIdx, hBase + 4, hBase + 5, hBase + 6);
-      pushTri(hullIdx, hBase + 4, hBase + 6, hBase + 7);
-
-      // Underside
-      hullPos.push(
-        lbBot.x, lbBot.y, lbBot.z,
-        lfBot.x, lfBot.y, lfBot.z,
-        rfBot.x, rfBot.y, rfBot.z,
-        rbBot.x, rbBot.y, rbBot.z,
-      );
-      hullNorm.push(
-        -s0.up.x, -s0.up.y, -s0.up.z,
-        -s1.up.x, -s1.up.y, -s1.up.z,
-        -s1.up.x, -s1.up.y, -s1.up.z,
-        -s0.up.x, -s0.up.y, -s0.up.z,
-      );
-      pushTri(hullIdx, hBase + 8, hBase + 9, hBase + 10);
-      pushTri(hullIdx, hBase + 8, hBase + 10, hBase + 11);
-      vOffsetHull += 12;
-
-      // Insert ColliderQuad into spatial hash
-      const a = vLB.clone();
-      const b = vRB.clone();
-      const c = vRF.clone();
-      const d = vLF.clone();
-      const center = new THREE.Vector3().add(a).add(b).add(c).add(d).multiplyScalar(0.25);
-      const normal = new THREE.Vector3().addVectors(s0.up, s1.up).normalize();
-      const tangent = new THREE.Vector3().addVectors(s0.forward, s1.forward).normalize();
-      const right = new THREE.Vector3().addVectors(s0.right, s1.right).normalize();
-
-      colliderHash.insert({
-        a,
-        b,
-        c,
-        d,
-        center,
-        normal,
-        tangent,
-        right,
-        isLoop: s0.isLoop || s1.isLoop,
-        isBoost: false,
-      });
+        // Left lane deck
+        pushDeckStrip(
+          vLB, vInLB, vInLF, vLF,
+          s0.up, s1.up, s0.right, s1.right, s0.forward, s1.forward,
+          0, 0.38, v0, v1, isLoopSeg, wh0, wh1,
+        );
+        // Right lane deck
+        pushDeckStrip(
+          vInRB, vRB, vRF, vInRF,
+          s0.up, s1.up, s0.right, s1.right, s0.forward, s1.forward,
+          0.62, 1, v0, v1, isLoopSeg, wh0, wh1,
+        );
+      } else {
+        if (activeInnerLeft.length >= 2) {
+          railRightPts.push(activeInnerLeft);
+          railLeftPts.push(activeInnerRight);
+          activeInnerLeft = [];
+          activeInnerRight = [];
+        }
+        pushDeckStrip(
+          vLB, vRB, vRF, vLF,
+          s0.up, s1.up, s0.right, s1.right, s0.forward, s1.forward,
+          0, 1, v0, v1, isLoopSeg, wh0, wh1,
+        );
+      }
 
       // Collect structural under-deck ribs every 4th slice
       if (i % 4 === 0) {
@@ -1426,6 +1984,10 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       }
     }
 
+    if (activeInnerLeft.length >= 2) {
+      railRightPts.push(activeInnerLeft);
+      railLeftPts.push(activeInnerRight);
+    }
     railLeftPts.push(leftRail);
     railRightPts.push(rightRail);
   }
@@ -1451,7 +2013,6 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
   // Neon side rails via TubeGeometry along each section
   for (let s = 0; s < railLeftPts.length; s++) {
     const lPts = railLeftPts[s];
-    const rPts = railRightPts[s];
     if (lPts.length >= 2) {
       const lCurve = new THREE.CatmullRomCurve3(lPts);
       const lGeo = new THREE.TubeGeometry(
@@ -1464,6 +2025,9 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
       disposables.push(lGeo);
       group.add(new THREE.Mesh(lGeo, railPrimaryMat));
     }
+  }
+  for (let s = 0; s < railRightPts.length; s++) {
+    const rPts = railRightPts[s];
     if (rPts.length >= 2) {
       const rCurve = new THREE.CatmullRomCurve3(rPts);
       const rGeo = new THREE.TubeGeometry(
@@ -1489,6 +2053,58 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     ribMesh.computeBoundingSphere();
     disposables.push(ribGeo);
     group.add(ribMesh);
+  }
+
+  // Instanced Roadside & Overhead Scenery Objects (arches, pylons, chevrons)
+  if (sceneryArchTransforms.length > 0) {
+    const topArchGeo = new THREE.BoxGeometry(1, 0.55, 0.85);
+    topArchGeo.translate(0, 8.2, 0);
+    const legGeo = new THREE.BoxGeometry(0.032, 8.2, 0.85);
+    legGeo.translate(-0.5, 4.1, 0);
+    const legGeoR = new THREE.BoxGeometry(0.032, 8.2, 0.85);
+    legGeoR.translate(0.5, 4.1, 0);
+    const archTopInst = new THREE.InstancedMesh(topArchGeo, railPrimaryMat, sceneryArchTransforms.length);
+    const archLegLInst = new THREE.InstancedMesh(legGeo, sideHullMaterial, sceneryArchTransforms.length);
+    const archLegRInst = new THREE.InstancedMesh(legGeoR, sideHullMaterial, sceneryArchTransforms.length);
+    for (let i = 0; i < sceneryArchTransforms.length; i++) {
+      archTopInst.setMatrixAt(i, sceneryArchTransforms[i]);
+      archLegLInst.setMatrixAt(i, sceneryArchTransforms[i]);
+      archLegRInst.setMatrixAt(i, sceneryArchTransforms[i]);
+    }
+    archTopInst.instanceMatrix.needsUpdate = true;
+    archLegLInst.instanceMatrix.needsUpdate = true;
+    archLegRInst.instanceMatrix.needsUpdate = true;
+    archTopInst.computeBoundingSphere();
+    archLegLInst.computeBoundingSphere();
+    archLegRInst.computeBoundingSphere();
+    disposables.push(topArchGeo, legGeo, legGeoR);
+    group.add(archTopInst, archLegLInst, archLegRInst);
+  }
+
+  if (sceneryPylonTransforms.length > 0) {
+    const pylonGeo = new THREE.OctahedronGeometry(1.15, 0);
+    pylonGeo.scale(0.85, 3.2, 0.85);
+    const pylonInst = new THREE.InstancedMesh(pylonGeo, railSecondaryMat, sceneryPylonTransforms.length);
+    for (let i = 0; i < sceneryPylonTransforms.length; i++) {
+      pylonInst.setMatrixAt(i, sceneryPylonTransforms[i]);
+    }
+    pylonInst.instanceMatrix.needsUpdate = true;
+    pylonInst.computeBoundingSphere();
+    disposables.push(pylonGeo);
+    group.add(pylonInst);
+  }
+
+  if (sceneryChevronTransforms.length > 0) {
+    const chevGeo = new THREE.BoxGeometry(0.32, 3.6, 0.9);
+    chevGeo.rotateZ(0.28);
+    const chevInst = new THREE.InstancedMesh(chevGeo, railPrimaryMat, sceneryChevronTransforms.length);
+    for (let i = 0; i < sceneryChevronTransforms.length; i++) {
+      chevInst.setMatrixAt(i, sceneryChevronTransforms[i]);
+    }
+    chevInst.instanceMatrix.needsUpdate = true;
+    chevInst.computeBoundingSphere();
+    disposables.push(chevGeo);
+    group.add(chevInst);
   }
 
   // Instanced Boost Pads (1 draw call instead of N)
@@ -1551,26 +2167,74 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     }
   };
 
+  const markRingCollected = (index: number) => {
+    const r = rings[index];
+    if (!r || r.collected) return;
+    r.collected = true;
+    if (ringMeshes[index]) {
+      ringMeshes[index].visible = false;
+    }
+  };
+
+  const resetRings = () => {
+    for (let i = 0; i < rings.length; i++) {
+      rings[i].collected = false;
+      if (ringMeshes[i]) {
+        ringMeshes[i].visible = true;
+      }
+    }
+  };
+
   return {
     group,
     colliderHash,
     boostZones,
+    jumpPads,
     checkpoints,
     coins,
+    rings,
     markCoinCollected,
     resetCoins,
-    finishGate: {
-      position: finishSample.pos.clone(),
-      forward: finishSample.forward.clone(),
-      width: finishSample.width,
-    },
+    markRingCollected,
+    resetRings,
+    finishGate,
     obstacles,
     spawnPoint,
+    endPose,
     gripMultiplier: groundSpecs.gripMultiplier,
+    queryQuads: (x, z, out) => colliderHash.query(x, z, out),
+    getGripAt: () => groundSpecs.gripMultiplier,
+    forEachBoostZone: (fn) => {
+      for (let i = 0; i < boostZones.length; i++) fn(boostZones[i]);
+    },
+    forEachJumpPad: (fn) => {
+      for (let i = 0; i < jumpPads.length; i++) fn(jumpPads[i]);
+    },
+    forEachObstacle: (fn) => {
+      for (let i = 0; i < obstacles.length; i++) fn(obstacles[i]);
+    },
+    forEachCheckpoint: (fn) => {
+      for (let i = 0; i < checkpoints.length; i++) fn(checkpoints[i]);
+    },
+    forEachCoin: (fn) => {
+      for (let i = 0; i < coins.length; i++) {
+        fn(coins[i], () => markCoinCollected(i));
+      }
+    },
+    forEachRing: (fn) => {
+      for (let i = 0; i < rings.length; i++) {
+        fn(rings[i], () => markRingCollected(i));
+      }
+    },
     update: (elapsed: number) => {
       boostTex.offset.y = -(elapsed * 2.2) % 1;
       for (let i = 0; i < obstacles.length; i++) {
         obstacles[i].update(elapsed);
+      }
+      for (let i = 0; i < ringMeshes.length; i++) {
+        if (!rings[i].collected) {
+          ringMeshes[i].rotation.z = elapsed * 1.6 + i * 0.7;
+        }
       }
       if (coinInstanced && coins.length > 0) {
         let anyActive = false;
