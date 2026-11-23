@@ -26,6 +26,10 @@ const CHASSIS_ORDER: ChassisId[] = [
   'titan',
   'phantom',
   'spectre',
+  'valkyrie',
+  'nemesis',
+  'nova',
+  'zenith',
 ];
 
 const GLIDER_ORDER: GliderId[] = ['none', 'aero-wings', 'plasma-kite', 'jet-pack'];
@@ -75,9 +79,9 @@ export const GarageDock: React.FC<GarageDockProps> = ({
           {/* Chassis Selector */}
           <div className="lg:col-span-5 space-y-2.5">
             <div className="text-xs font-medium text-slate-400">
-              Select Vehicle · 6 Frames
+              Select Vehicle · 10 Frames
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-3 gap-1.5">
               {CHASSIS_ORDER.map((id) => {
                 const spec = CHASSIS_SPECS[id];
                 const selected = garage.chassisId === id;
@@ -86,7 +90,7 @@ export const GarageDock: React.FC<GarageDockProps> = ({
                     key={id}
                     type="button"
                     onClick={() => onChangeGarage({ ...garage, chassisId: id })}
-                    className={`rounded-lg border px-2.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap truncate cursor-pointer ${
+                    className={`rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap truncate cursor-pointer ${
                       selected
                         ? 'border-cyan-400 bg-cyan-500/20 text-white'
                         : 'border-white/12 bg-white/5 text-slate-300 hover:border-white/25 hover:text-white'

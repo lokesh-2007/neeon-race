@@ -215,7 +215,7 @@ export default function App() {
           <div className="flex items-start justify-between gap-3">
             <div className="pointer-events-auto max-w-xl">
               <div className="text-[11px] sm:text-xs font-semibold tracking-wider text-cyan-300">
-                Arcade Stunt Driving · 8 Circuits · 6 Vehicles
+                Arcade Stunt Driving · 9 Circuits · 10 Vehicles
               </div>
               <h1 className="mt-1 font-display text-3xl font-bold tracking-tight text-white sm:text-5xl text-balance">
                 Neon Challenge Legends

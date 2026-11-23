@@ -8,7 +8,11 @@ export type ChassisId =
   | 'vortex'
   | 'titan'
   | 'phantom'
-  | 'spectre';
+  | 'spectre'
+  | 'valkyrie'
+  | 'nemesis'
+  | 'nova'
+  | 'zenith';
 
 export type GliderId = 'none' | 'aero-wings' | 'plasma-kite' | 'jet-pack';
 
@@ -277,6 +281,46 @@ export const CHASSIS_SPECS: Record<ChassisId, ChassisSpec> = {
     handling: 1.62,
     nitroPower: 32,
     stats: { speed: 91, grip: 84, boost: 98 },
+  },
+  valkyrie: {
+    id: 'valkyrie',
+    name: 'Valkyrie F1',
+    tagline: 'Open-cockpit cyber formula racer built for razor-sharp apexes',
+    topSpeed: 61,
+    acceleration: 32,
+    handling: 2.02,
+    nitroPower: 27,
+    stats: { speed: 93, grip: 99, boost: 84 },
+  },
+  nemesis: {
+    id: 'nemesis',
+    name: 'Nemesis Muscle',
+    tagline: 'Supercharged cyber-muscle coupe with massive low-end launch torque',
+    topSpeed: 57,
+    acceleration: 35,
+    handling: 1.52,
+    nitroPower: 29,
+    stats: { speed: 85, grip: 80, boost: 91 },
+  },
+  nova: {
+    id: 'nova',
+    name: 'Nova Hover-GT',
+    tagline: 'Twin-turbine aero prototype with balanced drift stability',
+    topSpeed: 58,
+    acceleration: 31,
+    handling: 1.82,
+    nitroPower: 29,
+    stats: { speed: 88, grip: 90, boost: 90 },
+  },
+  zenith: {
+    id: 'zenith',
+    name: 'Zenith LMP',
+    tagline: 'Endurance Le Mans shark-fin hypercar with peak straightaway velocity',
+    topSpeed: 64,
+    acceleration: 30,
+    handling: 1.68,
+    nitroPower: 33,
+    stats: { speed: 99, grip: 85, boost: 97 },
   },
 };
 

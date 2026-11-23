@@ -585,7 +585,7 @@ export class GameEngine {
   }
 
   private recordGhostFrame(timeSec: number): void {
-    if (this.recordedFrames.length >= 2800) return;
+    if (this.recordedFrames.length >= 4500) return;
     const p = this.vehicle.position;
     const q = this.vehicle.quaternion;
     const r2 = (n: number) => Math.round(n * 100) / 100;

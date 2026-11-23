@@ -40,22 +40,27 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
                 Select Circuit
               </h2>
               <p className="text-xs text-slate-400 sm:text-sm">
-                Eight elevated obstacle courses across distinct cyber grounds
+                Nine extended obstacle courses across distinct cyber grounds
               </p>
             </div>
           </div>
         </div>
 
-        {/* 8-Level Grid */}
+        {/* 9-Level Grid (Levels 1-8 + Featured Mega Circuit Level 9) */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {LEVELS.map((level) => {
             const record = bestTimes[level.id];
+            const isMega = level.number === 9;
             return (
               <button
                 key={level.id}
                 type="button"
                 onClick={() => onSelectLevel(level)}
-                className="group flex flex-col justify-between rounded-xl border border-white/15 bg-[#090c17]/95 p-4 text-left transition-colors hover:border-cyan-400/70 hover:bg-[#0d1222] cursor-pointer"
+                className={`group flex flex-col justify-between rounded-xl border p-4 text-left transition-colors cursor-pointer ${
+                  isMega
+                    ? 'sm:col-span-2 lg:col-span-4 border-[#39ff14]/40 bg-[#081312]/95 hover:border-[#39ff14] hover:bg-[#0b1a18]'
+                    : 'border-white/15 bg-[#090c17]/95 hover:border-cyan-400/70 hover:bg-[#0d1222]'
+                }`}
               >
                 <div>
                   <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
@@ -64,6 +69,12 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
                     </span>
                     <span aria-hidden="true">·</span>
                     <span className="text-slate-300">{level.groundLabel}</span>
+                    {isMega && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-semibold text-[#39ff14]">Mega Circuit</span>
+                      </>
+                    )}
                   </div>
 
                   <h3 className="mt-2 font-display text-lg font-bold tracking-tight text-white group-hover:text-cyan-300 transition-colors">

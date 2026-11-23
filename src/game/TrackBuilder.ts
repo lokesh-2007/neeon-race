@@ -1287,13 +1287,13 @@ export function buildTrack(level: LevelDefinition, maxAnisotropy = 4): BuiltTrac
     const rPts = railRightPts[s];
     if (lPts.length >= 2) {
       const lCurve = new THREE.CatmullRomCurve3(lPts);
-      const lGeo = new THREE.TubeGeometry(lCurve, Math.min(180, lPts.length * 2), 0.22, 6, false);
+      const lGeo = new THREE.TubeGeometry(lCurve, Math.min(720, Math.max(24, lPts.length)), 0.22, 6, false);
       disposables.push(lGeo);
       group.add(new THREE.Mesh(lGeo, railPrimaryMat));
     }
     if (rPts.length >= 2) {
       const rCurve = new THREE.CatmullRomCurve3(rPts);
-      const rGeo = new THREE.TubeGeometry(rCurve, Math.min(180, rPts.length * 2), 0.22, 6, false);
+      const rGeo = new THREE.TubeGeometry(rCurve, Math.min(720, Math.max(24, rPts.length)), 0.22, 6, false);
       disposables.push(rGeo);
       group.add(new THREE.Mesh(rGeo, railSecondaryMat));
     }

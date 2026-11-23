@@ -323,6 +323,46 @@ export function createVehicleMesh(
     sideProfile.lineTo(-1.6, 1.02);
     sideProfile.lineTo(-2.25, 0.74);
     sideProfile.closePath();
+  } else if (chassisId === 'valkyrie') {
+    // Narrow open-wheel cyber formula fuselage
+    sideProfile.moveTo(-2.45, 0.22);
+    sideProfile.lineTo(2.55, 0.2);
+    sideProfile.lineTo(2.7, 0.34);
+    sideProfile.lineTo(1.2, 0.52);
+    sideProfile.lineTo(0.05, 0.88);
+    sideProfile.lineTo(-1.55, 0.82);
+    sideProfile.lineTo(-2.4, 0.56);
+    sideProfile.closePath();
+  } else if (chassisId === 'nemesis') {
+    // Broad aggressive cyberpunk muscle coupe
+    sideProfile.moveTo(-2.25, 0.26);
+    sideProfile.lineTo(2.2, 0.26);
+    sideProfile.lineTo(2.28, 0.66);
+    sideProfile.lineTo(0.95, 0.74);
+    sideProfile.lineTo(0.2, 1.18);
+    sideProfile.lineTo(-1.15, 1.16);
+    sideProfile.lineTo(-2.18, 0.82);
+    sideProfile.closePath();
+  } else if (chassisId === 'nova') {
+    // Twin-turbine sleek aero prototype
+    sideProfile.moveTo(-2.3, 0.24);
+    sideProfile.lineTo(2.35, 0.24);
+    sideProfile.lineTo(2.48, 0.44);
+    sideProfile.lineTo(1.25, 0.64);
+    sideProfile.lineTo(0.3, 1.04);
+    sideProfile.lineTo(-1.3, 0.96);
+    sideProfile.lineTo(-2.25, 0.68);
+    sideProfile.closePath();
+  } else if (chassisId === 'zenith') {
+    // Long Le Mans endurance hypercar silhouette
+    sideProfile.moveTo(-2.45, 0.22);
+    sideProfile.lineTo(2.48, 0.22);
+    sideProfile.lineTo(2.6, 0.44);
+    sideProfile.lineTo(1.25, 0.66);
+    sideProfile.lineTo(0.25, 1.08);
+    sideProfile.lineTo(-1.45, 1.04);
+    sideProfile.lineTo(-2.4, 0.66);
+    sideProfile.closePath();
   } else {
     // Cyber Interceptor aggressive pursuit wedge
     sideProfile.moveTo(-2.25, 0.24);
@@ -336,7 +376,17 @@ export function createVehicleMesh(
   }
 
   const hullWidth =
-    chassisId === 'apex' ? 1.98 : chassisId === 'titan' ? 1.66 : chassisId === 'phantom' ? 1.56 : 1.78;
+    chassisId === 'apex' || chassisId === 'nemesis'
+      ? 1.98
+      : chassisId === 'titan'
+        ? 1.66
+        : chassisId === 'phantom'
+          ? 1.56
+          : chassisId === 'valkyrie'
+            ? 1.08
+            : chassisId === 'zenith'
+              ? 1.88
+              : 1.78;
   const hullGeo = new THREE.ExtrudeGeometry(sideProfile, {
     depth: hullWidth,
     bevelEnabled: true,
@@ -471,6 +521,85 @@ export function createVehicleMesh(
     stripR.position.set(0.42, 0.76, -1.25);
     stripR.rotation.x = 0.18;
     root.add(duck, stripL, stripR);
+  } else if (chassisId === 'valkyrie') {
+    // Open-wheel formula wide front wing, sidepods, cockpit halo, and tall F1 rear wing
+    const frontWingGeo = new THREE.BoxGeometry(2.35, 0.08, 0.58);
+    const frontTipGeo = new THREE.BoxGeometry(2.4, 0.14, 0.12);
+    const sidePodGeo = new THREE.BoxGeometry(0.48, 0.34, 1.75);
+    const rearWingGeo = new THREE.BoxGeometry(2.2, 0.09, 0.6);
+    const endplateGeo = new THREE.BoxGeometry(0.08, 0.54, 0.66);
+    disposables.push(frontWingGeo, frontTipGeo, sidePodGeo, rearWingGeo, endplateGeo);
+
+    const frontWing = new THREE.Mesh(frontWingGeo, carbonMat);
+    frontWing.position.set(0, 0.34, -2.38);
+    const frontTip = new THREE.Mesh(frontTipGeo, secondaryGlowMat);
+    frontTip.position.set(0, 0.36, -2.65);
+
+    const podL = new THREE.Mesh(sidePodGeo, bodyMat);
+    podL.position.set(-0.76, 0.46, 0.25);
+    const podR = new THREE.Mesh(sidePodGeo, bodyMat);
+    podR.position.set(0.76, 0.46, 0.25);
+
+    const rearWing = new THREE.Mesh(rearWingGeo, carbonMat);
+    rearWing.position.set(0, 1.24, 2.2);
+    const plateL = new THREE.Mesh(endplateGeo, secondaryGlowMat);
+    plateL.position.set(-1.12, 1.08, 2.2);
+    const plateR = new THREE.Mesh(endplateGeo, secondaryGlowMat);
+    plateR.position.set(1.12, 1.08, 2.2);
+    root.add(frontWing, frontTip, podL, podR, rearWing, plateL, plateR);
+  } else if (chassisId === 'nemesis') {
+    // Supercharged hood blower + glowing intake core + rear louver deck
+    const blowerGeo = new THREE.BoxGeometry(0.66, 0.34, 0.92);
+    const scoopGeo = new THREE.BoxGeometry(0.56, 0.16, 0.22);
+    const louverGeo = new THREE.BoxGeometry(1.48, 0.07, 0.16);
+    disposables.push(blowerGeo, scoopGeo, louverGeo);
+
+    const blower = new THREE.Mesh(blowerGeo, alloyMat);
+    blower.position.set(0, 0.92, -1.22);
+    const scoop = new THREE.Mesh(scoopGeo, secondaryGlowMat);
+    scoop.position.set(0, 1.04, -1.68);
+    root.add(blower, scoop);
+
+    for (let k = 0; k < 3; k++) {
+      const louver = new THREE.Mesh(louverGeo, carbonMat);
+      louver.position.set(0, 1.05 - k * 0.08, 1.28 + k * 0.28);
+      louver.rotation.x = -0.22;
+      root.add(louver);
+    }
+  } else if (chassisId === 'nova') {
+    // Twin dorsal turbine pods + angled cyber tailfins
+    const podGeo = new THREE.CylinderGeometry(0.24, 0.28, 1.45, 12);
+    podGeo.rotateX(Math.PI / 2);
+    const glowRingGeo = new THREE.TorusGeometry(0.25, 0.045, 8, 18);
+    const tailFinGeo = new THREE.BoxGeometry(0.08, 0.55, 0.85);
+    disposables.push(podGeo, glowRingGeo, tailFinGeo);
+
+    for (const xSide of [-0.55, 0.55]) {
+      const pod = new THREE.Mesh(podGeo, carbonMat);
+      pod.position.set(xSide, 0.96, 1.35);
+      const ring = new THREE.Mesh(glowRingGeo, secondaryGlowMat);
+      ring.position.set(xSide, 0.96, 2.08);
+      const fin = new THREE.Mesh(tailFinGeo, bodyMat);
+      fin.position.set(xSide * 1.45, 1.06, 1.75);
+      fin.rotation.z = xSide < 0 ? 0.35 : -0.35;
+      root.add(pod, ring, fin);
+    }
+  } else if (chassisId === 'zenith') {
+    // Le Mans dorsal shark-fin + wide split endurance wing
+    const sharkFinGeo = new THREE.BoxGeometry(0.08, 0.62, 1.95);
+    const wingGeo = new THREE.BoxGeometry(2.38, 0.08, 0.56);
+    const wingSideGeo = new THREE.BoxGeometry(0.08, 0.38, 0.62);
+    disposables.push(sharkFinGeo, wingGeo, wingSideGeo);
+
+    const sharkFin = new THREE.Mesh(sharkFinGeo, secondaryGlowMat);
+    sharkFin.position.set(0, 1.24, 1.05);
+    const wing = new THREE.Mesh(wingGeo, carbonMat);
+    wing.position.set(0, 1.22, 2.18);
+    const endL = new THREE.Mesh(wingSideGeo, primaryGlowMat);
+    endL.position.set(-1.18, 1.14, 2.18);
+    const endR = new THREE.Mesh(wingSideGeo, primaryGlowMat);
+    endR.position.set(1.18, 1.14, 2.18);
+    root.add(sharkFin, wing, endL, endR);
   } else {
     // Interceptor twin angled stabilizer fins
     const finGeo = new THREE.BoxGeometry(0.1, 0.44, 0.88);
@@ -524,7 +653,10 @@ export function createVehicleMesh(
   rimRingGeo.rotateY(Math.PI / 2);
   disposables.push(tireGeo, hubGeo, rimRingGeo);
 
-  const wheelTrackX = hullWidth * 0.5 + (chassisId === 'titan' ? 0.3 : 0.16);
+  const wheelTrackX =
+    chassisId === 'valkyrie'
+      ? 1.08
+      : hullWidth * 0.5 + (chassisId === 'titan' ? 0.3 : 0.16);
   const wheelConfigs = [
     { x: -wheelTrackX, z: -1.42, front: true, side: -1 },
     { x: wheelTrackX, z: -1.42, front: true, side: 1 },
@@ -621,7 +753,17 @@ export function createGhostVehicleMesh(
   disposables.push(ghostShellMat, ghostTrimMat, ghostWireMat);
 
   const hullWidth =
-    chassisId === 'apex' ? 1.98 : chassisId === 'titan' ? 1.66 : chassisId === 'phantom' ? 1.56 : 1.78;
+    chassisId === 'apex' || chassisId === 'nemesis'
+      ? 1.98
+      : chassisId === 'titan'
+        ? 1.66
+        : chassisId === 'phantom'
+          ? 1.56
+          : chassisId === 'valkyrie'
+            ? 1.08
+            : chassisId === 'zenith'
+              ? 1.88
+              : 1.78;
   const bodyGeo = new THREE.BoxGeometry(hullWidth, 0.68, 4.4);
   const cabinGeo = new THREE.BoxGeometry(hullWidth * 0.72, 0.36, 1.85);
   const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.34, 12);
